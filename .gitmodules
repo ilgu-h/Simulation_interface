@@ -1,9 +1,11 @@
 [submodule "frameworks/astra-sim"]
 	path = frameworks/astra-sim
 	url = https://github.com/ilgu-h/astra-sim.git
+	ignore = dirty
 [submodule "frameworks/chakra"]
 	path = frameworks/chakra
 	url = https://github.com/mlcommons/chakra.git
+	ignore = dirty
 [submodule "frameworks/symbolic_tensor_graph"]
 	path = frameworks/symbolic_tensor_graph
 	url = https://github.com/astra-sim/symbolic_tensor_graph.git
