@@ -86,6 +86,99 @@ export type GenerateResponse = {
 export const generateWorkload = (spec: StgSpec): Promise<GenerateResponse> =>
   postJson<GenerateResponse>("/workloads/generate", spec);
 
+export type BackendInfo = {
+  name: string;
+  label: string;
+  network_schema: string;
+  binary_path: string;
+  built: boolean;
+};
+
+export const listBackends = (): Promise<BackendInfo[]> => getJson<BackendInfo[]>("/backends");
+
+export type TopologyKind = "Ring" | "FullyConnected" | "Switch";
+
+export type NetworkConfig = {
+  topology: TopologyKind[];
+  npus_count: number[];
+  bandwidth: number[];
+  latency: number[];
+};
+
+export type SystemConfig = {
+  "scheduling-policy": "LIFO" | "FIFO";
+  "endpoint-delay": number;
+  "active-chunks-per-dimension": number;
+  "preferred-dataset-splits": number;
+  "all-reduce-implementation": string[];
+  "all-gather-implementation": string[];
+  "reduce-scatter-implementation": string[];
+  "all-to-all-implementation": string[];
+  "collective-optimization": "localBWAware" | "";
+  "local-mem-bw": number;
+  "boost-mode": 0 | 1;
+  "roofline-enabled"?: 0 | 1;
+  "peak-perf"?: number;
+};
+
+export type MemoryConfig = { "memory-type": "NO_MEMORY_EXPANSION" };
+
+export type ConfigBundle = {
+  backend: string;
+  system: SystemConfig;
+  network: NetworkConfig;
+  memory: MemoryConfig;
+  expected_npus?: number | null;
+};
+
+export type Issue = {
+  severity: "error" | "warning" | "info";
+  field: string;
+  message: string;
+};
+
+export type ValidateResponse = {
+  ok: boolean;
+  issues: Issue[];
+  total_npus: number;
+  binary_present: boolean;
+};
+
+export type MaterializeResponse = {
+  run_id: string;
+  config_dir: string;
+  files: { network: string; system: string; memory: string };
+};
+
+export const validateConfigs = (b: ConfigBundle): Promise<ValidateResponse> =>
+  postJson<ValidateResponse>("/configs/validate", b);
+
+export const materializeConfigs = (b: ConfigBundle): Promise<MaterializeResponse> =>
+  postJson<MaterializeResponse>("/configs/materialize", b);
+
+export const defaultSystemConfig = (): SystemConfig => ({
+  "scheduling-policy": "LIFO",
+  "endpoint-delay": 10,
+  "active-chunks-per-dimension": 1,
+  "preferred-dataset-splits": 4,
+  "all-reduce-implementation": ["ring"],
+  "all-gather-implementation": ["ring"],
+  "reduce-scatter-implementation": ["ring"],
+  "all-to-all-implementation": ["ring"],
+  "collective-optimization": "localBWAware",
+  "local-mem-bw": 1600,
+  "boost-mode": 0,
+});
+
+export const defaultNetworkConfig = (): NetworkConfig => ({
+  topology: ["Ring"],
+  npus_count: [8],
+  bandwidth: [50.0],
+  latency: [500.0],
+});
+
+export const defaultMemoryConfig = (): MemoryConfig => ({ "memory-type": "NO_MEMORY_EXPANSION" });
+
 export const defaultStgSpec = (): StgSpec => ({
   model_type: "dense",
   dp: 1,
