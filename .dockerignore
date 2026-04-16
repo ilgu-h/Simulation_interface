@@ -3,6 +3,10 @@
 frontend/node_modules/
 frontend/.next/
 
+# Host-built ASTRA-sim binary — must be compiled inside the image so it
+# links against the container's libprotobuf, not the host's.
+frameworks/astra-sim/build/astra_analytical/build/
+
 # Runtime data
 runs/
 

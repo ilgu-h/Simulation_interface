@@ -1,8 +1,14 @@
-FROM ubuntu:22.04 AS base
+FROM ubuntu:24.04 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake protobuf-compiler git curl ca-certificates \
+# 24.04 ships protobuf 3.21 (libprotobuf.so.32), matching the host build.
+# libprotobuf-dev is needed so CMake resolves headers and the shared
+# library at runtime. The apt-get update retry loop tolerates transient
+# mirror sync failures seen intermittently on jammy; retained for noble.
+RUN for i in 1 2 3; do apt-get update && break || sleep 5; done \
+    && apt-get install -y --no-install-recommends \
+    build-essential cmake protobuf-compiler libprotobuf-dev \
+    git curl ca-certificates \
     python3 python3-dev python3-venv python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
