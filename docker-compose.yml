@@ -1,0 +1,37 @@
+services:
+  builder:
+    build:
+      context: .
+      dockerfile: docker/builder.Dockerfile
+    image: simulation-interface-builder
+    volumes:
+      - runs:/app/runs
+    command: echo "Builder image ready. Use 'docker compose run backend' or 'docker compose up'."
+
+  backend:
+    image: simulation-interface-builder
+    depends_on:
+      - builder
+    ports:
+      - "8000:8000"
+    volumes:
+      - runs:/app/runs
+    working_dir: /app
+    command: .venv-backend/bin/uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
+    environment:
+      - SIM_RUNS_DIR=/app/runs
+      - STG_PYTHON=/opt/miniforge3/envs/stg-env/bin/python
+
+  frontend:
+    image: simulation-interface-builder
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    working_dir: /app/frontend
+    command: pnpm start -p 3000
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+
+volumes:
+  runs:
