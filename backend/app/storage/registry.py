@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC as _UTC
 from datetime import datetime
 from pathlib import Path
 
@@ -21,7 +22,7 @@ RUNS_DIR = get_runs_dir()
 class Run(SQLModel, table=True):
     id: str = Field(primary_key=True)
     status: str = Field(default="queued")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=_UTC))
 
 
 class Artifact(SQLModel, table=True):

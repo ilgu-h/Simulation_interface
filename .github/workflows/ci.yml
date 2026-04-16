@@ -21,11 +21,11 @@ jobs:
       - name: Install backend (dev)
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev]
+          pip install pytest-cov -e .[dev]
       - name: Lint
         run: ruff check .
-      - name: Tests
-        run: pytest -q
+      - name: Unit + integration tests
+        run: pytest tests/unit tests/integration -q --cov=app --cov-fail-under=70
 
   frontend:
     runs-on: ubuntu-22.04
@@ -49,5 +49,6 @@ jobs:
       - name: Build
         run: pnpm build
 
-  # TODO Phase 4: heavy ASTRA-sim build + smoke runs in a separate job
-  # gated on backend/frontend success. Skipped here to keep CI fast.
+  # Smoke tests require ASTRA-sim built from source + submodules.
+  # Run on a schedule or manually; too heavy for every push.
+  # To run locally: cd backend && pytest tests/smoke -q

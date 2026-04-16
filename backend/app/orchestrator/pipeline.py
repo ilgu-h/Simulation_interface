@@ -17,7 +17,7 @@ import json
 import shutil
 import subprocess
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +53,7 @@ def append_event(run_id: str, kind: str, **fields: Any) -> None:
     """
     path = events_log(run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    rec = {"ts": datetime.utcnow().isoformat(), "kind": kind, **fields}
+    rec = {"ts": datetime.now(UTC).isoformat(), "kind": kind, **fields}
     with path.open("a") as f:
         f.write(json.dumps(rec) + "\n")
 
