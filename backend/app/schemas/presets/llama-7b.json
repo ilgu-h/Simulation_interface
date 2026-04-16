@@ -1,0 +1,21 @@
+{
+  "id": "llama-7b",
+  "label": "LLaMA-7B",
+  "model_type": "llama",
+  "spec": {
+    "model_type": "llama",
+    "dvocal": 32000,
+    "dmodel": 4096,
+    "dff": 11008,
+    "head": 32,
+    "kvhead": 32,
+    "num_stacks": 32,
+    "seq": 2048,
+    "batch": 4,
+    "dp": 1,
+    "tp": 1,
+    "sp": 1,
+    "pp": 1,
+    "ep": 1
+  }
+}

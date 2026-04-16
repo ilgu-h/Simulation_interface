@@ -1,0 +1,21 @@
+{
+  "id": "gpt3-175b",
+  "label": "GPT-3 175B",
+  "model_type": "gpt",
+  "spec": {
+    "model_type": "gpt",
+    "dvocal": 50257,
+    "dmodel": 12288,
+    "dff": 49152,
+    "head": 96,
+    "kvhead": 96,
+    "num_stacks": 96,
+    "seq": 2048,
+    "batch": 16,
+    "dp": 1,
+    "tp": 8,
+    "sp": 1,
+    "pp": 8,
+    "ep": 1
+  }
+}
