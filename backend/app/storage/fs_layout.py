@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from app.storage.registry import RUNS_DIR
+from app.storage.registry import get_runs_dir
 
 
 def new_run_id() -> str:
@@ -13,7 +13,7 @@ def new_run_id() -> str:
 
 
 def run_dir(run_id: str) -> Path:
-    return RUNS_DIR / run_id
+    return get_runs_dir() / run_id
 
 
 def traces_dir(run_id: str) -> Path:
