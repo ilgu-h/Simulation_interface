@@ -279,10 +279,13 @@ def _validate(req: RunValidateRequest) -> RunValidateResponse:
                 )
 
     # Inherit cross-field checks from /configs/validate (Switch>=2 etc).
+    # system.py and runs.py each define their own Issue class. Pydantic 2.x
+    # treats them as distinct types, so re-hydrate into the local Issue
+    # before extending the response list.
     from app.api.system import _validate_bundle
 
     bundle_issues, _ = _validate_bundle(req.bundle)
-    issues.extend(bundle_issues)
+    issues.extend(Issue(**iss.model_dump()) for iss in bundle_issues)
 
     has_error = any(i.severity == "error" for i in issues)
 
