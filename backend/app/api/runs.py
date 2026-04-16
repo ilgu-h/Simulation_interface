@@ -108,6 +108,74 @@ class RunValidateResponse(BaseModel):
     )
 
 
+# Real STG-emitted comm-group JSONs are a flat rank-list map; they sit
+# comfortably under a hundred KB even for thousands of ranks. Refuse to
+# load anything oversized rather than allocate it into memory.
+_MAX_COMM_GROUP_BYTES = 10 * 1024 * 1024  # 10 MiB
+
+
+def _validate_comm_group(workload_prefix: Path) -> list[Issue]:
+    """Inspect the sibling {prefix}.json that STG emits for comm-group IDs.
+
+    Missing file -> warn; a workload that never references a group is fine.
+    Malformed/empty JSON when .et traces exist -> error, because ASTRA-sim
+    would silently clear all groups and then crash on the first node that
+    references one (e.g. `communicator group N not found`).
+    """
+    path = workload_prefix.parent / f"{workload_prefix.name}.json"
+    if not path.exists():
+        return [
+            Issue(
+                severity="warning",
+                field="workload.comm_group",
+                message=(
+                    f"No comm-group file at {path.name}. ASTRA-sim will run "
+                    "with no groups (fine for single-dim workloads)."
+                ),
+            )
+        ]
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return [
+            Issue(
+                severity="error",
+                field="workload.comm_group",
+                message=f"Failed to stat {path.name}: {exc}",
+            )
+        ]
+    if size > _MAX_COMM_GROUP_BYTES:
+        return [
+            Issue(
+                severity="error",
+                field="workload.comm_group",
+                message=(
+                    f"{path.name} is {size} bytes; refusing to load files "
+                    f"larger than {_MAX_COMM_GROUP_BYTES} bytes."
+                ),
+            )
+        ]
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return [
+            Issue(
+                severity="error",
+                field="workload.comm_group",
+                message=f"Failed to parse {path.name}: {exc}",
+            )
+        ]
+    if not isinstance(payload, dict) or not payload:
+        return [
+            Issue(
+                severity="error",
+                field="workload.comm_group",
+                message=f"{path.name} is empty; multi-dim workloads will crash.",
+            )
+        ]
+    return []
+
+
 def _resolve_workload(ref: WorkloadRef) -> tuple[Path, list[Path]]:
     """Return (prefix, sorted list of .et files matching prefix.*.et)."""
     if ref.kind == "run":
@@ -152,6 +220,8 @@ def _validate(req: RunValidateRequest) -> RunValidateResponse:
                     ),
                 )
             )
+        # Comm-group configuration sanity (see astra-sim Workload.cc).
+        issues.extend(_validate_comm_group(prefix))
 
     # Backend binary check
     binary_present = False
@@ -209,10 +279,13 @@ def _validate(req: RunValidateRequest) -> RunValidateResponse:
                 )
 
     # Inherit cross-field checks from /configs/validate (Switch>=2 etc).
+    # system.py and runs.py each define their own Issue class. Pydantic 2.x
+    # treats them as distinct types, so re-hydrate into the local Issue
+    # before extending the response list.
     from app.api.system import _validate_bundle
 
     bundle_issues, _ = _validate_bundle(req.bundle)
-    issues.extend(bundle_issues)
+    issues.extend(Issue(**iss.model_dump()) for iss in bundle_issues)
 
     has_error = any(i.severity == "error" for i in issues)
 
