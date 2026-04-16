@@ -50,6 +50,12 @@ jobs:
       - name: Lint
         run: ruff check .
       - name: Unit + integration tests
+        env:
+          # Ubuntu 22.04's protoc (3.12) generates pb2 files that the
+          # chakra-installed protobuf Python runtime (4.x/5.x) refuses to
+          # load via the C++ descriptor pool. The pure-Python parser works
+          # regardless of the version skew and is fast enough for CI.
+          PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
         run: pytest tests/unit tests/integration -q --cov=app --cov-fail-under=70
 
   frontend:
