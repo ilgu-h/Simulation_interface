@@ -1,0 +1,49 @@
+# Per-run artifacts (gitignored, see plan.md §3)
+runs/
+
+# Python
+.venv-backend/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Conda envs (if accidentally created in-tree)
+envs/
+.conda/
+
+# Node / Next.js
+node_modules/
+.next/
+.turbo/
+.pnpm-store/
+*.tsbuildinfo
+
+# ASTRA-sim build outputs
+frameworks/astra-sim/build/*/build/
+frameworks/astra-sim/extern/network_backend/*/build/
+
+# Data
+*.parquet
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
