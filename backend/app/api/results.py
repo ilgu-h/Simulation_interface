@@ -256,6 +256,21 @@ def get_spec(run_id: str) -> JSONResponse:
     return JSONResponse(content=json.loads(p.read_text()))
 
 
+@router.get("/{run_id}/spec.yaml")
+def get_spec_yaml(run_id: str):
+    """YAML export for reproducibility (plan.md §6)."""
+    import yaml
+
+    p = _spec_path(run_id)
+    if not p.exists():
+        raise HTTPException(404, f"spec.json missing for run {run_id}.")
+    data = json.loads(p.read_text())
+    body = yaml.dump(data, default_flow_style=False, sort_keys=False)
+    from fastapi.responses import Response
+
+    return Response(content=body, media_type="application/x-yaml")
+
+
 @router.get("/{run_id}/logs/{name}")
 def get_log(run_id: str, name: str) -> FileResponse:
     if not name.replace(".", "").replace("_", "").isalnum():

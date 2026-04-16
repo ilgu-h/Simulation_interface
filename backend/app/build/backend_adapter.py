@@ -48,6 +48,16 @@ _REGISTRY: dict[str, BackendAdapter] = {
         build_cmd=["bash", str(REPO_ROOT / "scripts" / "build_backends.sh"), "analytical"],
         network_schema="analytical",
     ),
+    # Stub entry demonstrating extensibility (plan.md §6 item 6). This
+    # backend doesn't build yet (ns3 submodule not cloned), but it appears
+    # in the /backends dropdown and will show "needs build" in the UI.
+    "ns3": BackendAdapter(
+        name="ns3",
+        label="NS-3 (packet-level)",
+        binary_path=ASTRA_SIM_DIR / "build" / "astra_ns3" / "build" / "bin" / "AstraSim_NS3",
+        build_cmd=["bash", str(REPO_ROOT / "scripts" / "build_backends.sh"), "ns3"],
+        network_schema="ns3",
+    ),
 }
 
 
