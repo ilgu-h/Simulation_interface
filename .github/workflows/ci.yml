@@ -30,6 +30,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends protobuf-compiler
           git submodule update --init --depth 1 frameworks/chakra
+          # astra-sim is also shallow-cloned because
+          # tests/integration/test_api_health.py::test_runs_validate_reference
+          # points at one of its bundled example .et files. We do not build
+          # astra-sim in CI (smoke tests run elsewhere), we just need the
+          # checked-in workload traces.
+          git submodule update --init --depth 1 frameworks/astra-sim
           # Strip [build_grpc] cmdclass so pip install does not need
           # grpc-tools (mirrors scripts/bootstrap.sh section 3b).
           cat > frameworks/chakra/setup.cfg <<'EOF'
