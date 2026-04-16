@@ -78,7 +78,6 @@ FORCE=1 bash scripts/build_backends.sh                # rebuild
 
 ## What's NOT done
 
-- Docker: files written but untested (Docker not installed on host).
 - Cowork harness (TASKS.md + worktrees): deferred.
 - Embedded Perfetto iframe: timeline.json is downloadable, not embedded.
 - Per-layer breakdown: requires METADATA nodes in .et traces (none in current microbenchmarks).

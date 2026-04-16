@@ -46,9 +46,11 @@ RUN if grep -q "build_grpc" frameworks/chakra/setup.cfg 2>/dev/null; then \
       echo "# Patched for PEP 660" > frameworks/chakra/setup.cfg; \
       printf 'from setuptools import setup\nsetup()\n' > frameworks/chakra/setup.py; \
     fi \
-    && protoc --proto_path=frameworks/chakra/schema/protobuf \
-              --python_out=frameworks/chakra/schema/protobuf \
-              frameworks/chakra/schema/protobuf/et_def.proto 2>/dev/null || true \
+    && if [ ! -f frameworks/chakra/schema/protobuf/et_def_pb2.py ]; then \
+         protoc --proto_path=frameworks/chakra/schema/protobuf \
+                --python_out=frameworks/chakra/schema/protobuf \
+                frameworks/chakra/schema/protobuf/et_def.proto 2>/dev/null || true; \
+       fi \
     && if [ -f frameworks/astra-sim/extern/helper/cxxopts/cxxopts.hpp ] \
        && ! grep -q "^#include <cstdint>" frameworks/astra-sim/extern/helper/cxxopts/cxxopts.hpp; then \
          sed -i '/^#include <cstring>/i #include <cstdint>' \
