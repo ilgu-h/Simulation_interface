@@ -13,8 +13,15 @@ green() { printf "\033[32m%s\033[0m\n" "$*"; }
 info()  { printf "\033[36m%s\033[0m\n" "$*"; }
 
 FAILURES=0
+TMPFILE=$(mktemp /tmp/sim_gen_resp.XXXXXX.json)
+trap 'rm -f "$TMPFILE"' EXIT
+
 pass() { green "PASS: $1"; }
 fail() { red  "FAIL: $1"; FAILURES=$((FAILURES + 1)); }
+
+validate_id() {
+  [[ "$1" =~ ^[a-zA-Z0-9_-]{1,64}$ ]] || { fail "Unexpected id format: $1"; return 1; }
+}
 
 # ── Preflight: check backend is reachable ────────────────────────────────
 info "Checking backend at ${BACKEND_URL}..."
@@ -82,7 +89,7 @@ GENERATE_BODY='{
   "chakra_schema_version": "v0.0.4"
 }'
 
-HTTP=$(curl -sf -o /tmp/sim_gen_resp.json -w "%{http_code}" \
+HTTP=$(curl -sf -o $TMPFILE -w "%{http_code}" \
   -X POST "${BACKEND_URL}/workloads/generate" \
   -H "Content-Type: application/json" \
   -d "$GENERATE_BODY")
@@ -91,11 +98,11 @@ if [ "$HTTP" = "200" ]; then
   pass "POST /workloads/generate returns 200"
 else
   fail "POST /workloads/generate returned ${HTTP}"
-  cat /tmp/sim_gen_resp.json 2>/dev/null || true
+  cat $TMPFILE 2>/dev/null || true
 fi
 
-if [ -f /tmp/sim_gen_resp.json ]; then
-  RESP=$(cat /tmp/sim_gen_resp.json)
+if [ -f $TMPFILE ]; then
+  RESP=$(cat $TMPFILE)
 
   if echo "$RESP" | grep -q "run_id"; then
     pass "Response contains run_id"
@@ -111,7 +118,7 @@ if [ -f /tmp/sim_gen_resp.json ]; then
 
   # Verify trace files exist on disk
   RUN_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('run_id',''))" 2>/dev/null || true)
-  if [ -n "$RUN_ID" ]; then
+  if [ -n "$RUN_ID" ] && validate_id "$RUN_ID"; then
     TRACES_DIR="${REPO_ROOT}/runs/${RUN_ID}/traces"
     if [ -d "$TRACES_DIR" ]; then
       ET_COUNT=$(find "$TRACES_DIR" -name "*.et" | wc -l)
@@ -126,7 +133,7 @@ if [ -f /tmp/sim_gen_resp.json ]; then
   fi
 fi
 
-rm -f /tmp/sim_gen_resp.json
+# TMPFILE cleaned up by EXIT trap
 
 # ── Summary ──────────────────────────────────────────────────────────────
 echo ""

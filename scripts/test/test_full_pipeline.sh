@@ -20,6 +20,10 @@ TOTAL=0
 pass() { green "PASS: $1"; TOTAL=$((TOTAL + 1)); }
 fail() { red  "FAIL: $1"; FAILURES=$((FAILURES + 1)); TOTAL=$((TOTAL + 1)); }
 
+validate_id() {
+  [[ "$1" =~ ^[a-zA-Z0-9_-]{1,64}$ ]] || { fail "Unexpected id format: $1"; return 1; }
+}
+
 cleanup() {
   if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
     kill "$PID" 2>/dev/null || true
@@ -53,6 +57,7 @@ pass "Backend started on port ${PORT}"
 wait_for_run() {
   local run_id=$1
   local timeout=${2:-30}
+  [[ "$timeout" =~ ^[0-9]+$ ]] || { echo "timeout"; return; }
   local status="unknown"
   for i in $(seq 1 $((timeout * 2))); do
     status=$(curl -sf "${URL}/runs/${run_id}" | \
@@ -105,10 +110,10 @@ RUN_A_BODY='{
 RESP_A=$(curl -sf -X POST "${URL}/runs" -H "Content-Type: application/json" -d "$RUN_A_BODY")
 RUN_ID_A=$(echo "$RESP_A" | python3 -c "import sys,json; print(json.load(sys.stdin)['run_id'])" 2>/dev/null)
 
-if [ -n "$RUN_ID_A" ]; then
+if [ -n "$RUN_ID_A" ] && validate_id "$RUN_ID_A"; then
   pass "Run A started: ${RUN_ID_A}"
 else
-  fail "Run A failed to start"
+  fail "Run A failed to start or invalid run_id"
   exit 1
 fi
 
@@ -184,10 +189,10 @@ print(json.dumps(b))
 RESP_B=$(curl -sf -X POST "${URL}/runs" -H "Content-Type: application/json" -d "$RUN_B_BODY")
 RUN_ID_B=$(echo "$RESP_B" | python3 -c "import sys,json; print(json.load(sys.stdin)['run_id'])" 2>/dev/null)
 
-if [ -n "$RUN_ID_B" ]; then
+if [ -n "$RUN_ID_B" ] && validate_id "$RUN_ID_B"; then
   pass "Run B started: ${RUN_ID_B}"
 else
-  fail "Run B failed to start"
+  fail "Run B failed to start or invalid run_id"
   exit 1
 fi
 

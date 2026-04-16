@@ -17,6 +17,10 @@ FAILURES=0
 pass() { green "PASS: $1"; }
 fail() { red  "FAIL: $1"; FAILURES=$((FAILURES + 1)); }
 
+validate_id() {
+  [[ "$1" =~ ^[a-zA-Z0-9_-]{1,64}$ ]] || { fail "Unexpected id format: $1"; return 1; }
+}
+
 # ── Preflight ────────────────────────────────────────────────────────────
 if ! curl -sf "${BACKEND_URL}/health" >/dev/null 2>&1; then
   red "Backend not reachable at ${BACKEND_URL}. Start it first."
@@ -71,6 +75,7 @@ if [ -z "$RUN_ID" ]; then
   fail "POST /runs did not return a run_id"
   exit 1
 fi
+validate_id "$RUN_ID" || exit 1
 pass "POST /runs returned run_id=${RUN_ID}"
 
 # ── Poll until succeeded or failed (30s timeout) ─────────────────────────

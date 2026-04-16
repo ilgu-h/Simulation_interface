@@ -16,6 +16,10 @@ FAILURES=0
 pass() { green "PASS: $1"; }
 fail() { red  "FAIL: $1"; FAILURES=$((FAILURES + 1)); }
 
+validate_id() {
+  [[ "$1" =~ ^[a-zA-Z0-9_-]{1,64}$ ]] || { fail "Unexpected id format: $1"; return 1; }
+}
+
 # ── Preflight ────────────────────────────────────────────────────────────
 if ! curl -sf "${BACKEND_URL}/health" >/dev/null 2>&1; then
   red "Backend not reachable at ${BACKEND_URL}. Start it first."
@@ -129,7 +133,7 @@ fi
 # Extract run_id and verify files
 RUN_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('run_id',''))" 2>/dev/null || true)
 
-if [ -n "$RUN_ID" ]; then
+if [ -n "$RUN_ID" ] && validate_id "$RUN_ID"; then
   CONFIG_DIR="${REPO_ROOT}/runs/${RUN_ID}/configs"
 
   if [ -f "${CONFIG_DIR}/network.yml" ]; then
