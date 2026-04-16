@@ -307,6 +307,25 @@ class RunStatus(BaseModel):
     log_dir: str | None = None
 
 
+class RunListItem(BaseModel):
+    run_id: str
+    status: str
+    created_at: str
+
+
+@router.get("", response_model=list[RunListItem])
+def list_runs() -> list[RunListItem]:
+    """List all runs, most recent first."""
+    from sqlmodel import select
+
+    with Session(get_engine()) as session:
+        rows = session.exec(select(Run).order_by(Run.created_at.desc())).all()  # type: ignore[attr-defined]
+    return [
+        RunListItem(run_id=r.id, status=r.status, created_at=r.created_at.isoformat())
+        for r in rows
+    ]
+
+
 @router.post("", response_model=StartRunResponse)
 def start_run(req: StartRunRequest) -> StartRunResponse:
     # Resolve workload prefix the same way validate does, but reject paths

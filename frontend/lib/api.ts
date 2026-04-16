@@ -201,6 +201,14 @@ export type StartRunResponse = { run_id: string; status: string };
 export const startRun = (req: StartRunRequest): Promise<StartRunResponse> =>
   postJson<StartRunResponse>("/runs", req);
 
+export type RunListItem = {
+  run_id: string;
+  status: RunStatusValue;
+  created_at: string;
+};
+
+export const listRuns = (): Promise<RunListItem[]> => getJson<RunListItem[]>("/runs");
+
 export type RunStatusValue =
   | "queued"
   | "building"
