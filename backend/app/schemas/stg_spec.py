@@ -53,7 +53,7 @@ class StgSpec(BaseModel):
     tpsp: bool = True
     mixed_precision: bool = False
 
-    chakra_schema_version: str = "v0.0.4"
+    chakra_schema_version: str = Field("v0.0.4", pattern=r"^v\d+\.\d+\.\d+$")
 
     @model_validator(mode="after")
     def _check_model_shape(self) -> StgSpec:

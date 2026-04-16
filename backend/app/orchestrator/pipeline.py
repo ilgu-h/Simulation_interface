@@ -14,7 +14,6 @@ to the same run independently and a refresh resumes from the start.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import threading
 from datetime import UTC, datetime
@@ -224,8 +223,3 @@ __all__ = [
     "execute_pipeline_async",
     "stdout_log",
 ]
-
-
-# Suppress unused-import warning while keeping shutil reachable for future use
-# (signed log rotation lands in Phase 5).
-_ = shutil

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -38,6 +39,13 @@ SMOKE_WORKLOAD_PREFIX = (
     EXAMPLES_WORKLOAD_DIR / "microbenchmarks" / "reduce_scatter" / "4npus_1MB" / "reduce_scatter"
 )
 SMOKE_NPUS = 4
+
+_SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _assert_safe_id(run_id: str) -> None:
+    if not _SAFE_ID_RE.match(run_id):
+        raise HTTPException(400, f"Invalid id: {run_id!r}")
 
 # Native collective implementations recognised by the analytical backend.
 # Anything else is allowed (custom collectives) but warned on.
@@ -103,10 +111,12 @@ class RunValidateResponse(BaseModel):
 def _resolve_workload(ref: WorkloadRef) -> tuple[Path, list[Path]]:
     """Return (prefix, sorted list of .et files matching prefix.*.et)."""
     if ref.kind == "run":
+        _assert_safe_id(ref.value)
         prefix = traces_dir(ref.value) / ref.name
     else:
         raw = Path(ref.value)
         prefix = raw if raw.is_absolute() else (REPO_ROOT / raw)
+        prefix = pipeline.assert_repo_path(prefix)
     matches = sorted(prefix.parent.glob(f"{prefix.name}.*.et"))
     return prefix, matches
 
@@ -322,6 +332,7 @@ def start_run(req: StartRunRequest) -> StartRunResponse:
 
 @router.get("/{run_id}", response_model=RunStatus)
 def get_run(run_id: str) -> RunStatus:
+    _assert_safe_id(run_id)
     with Session(get_engine()) as session:
         row = session.get(Run, run_id)
     if row is None:
@@ -336,6 +347,7 @@ def get_run(run_id: str) -> RunStatus:
 
 @router.post("/{run_id}/cancel")
 def cancel_run(run_id: str) -> dict[str, bool]:
+    _assert_safe_id(run_id)
     ok = astra_runner.cancel_run(run_id)
     if ok:
         pipeline.append_event(run_id, "log", text="[cancel] SIGTERM sent")
@@ -350,6 +362,7 @@ async def stream_events(run_id: str) -> StreamingResponse:
     then tails new lines until a `done` event lands or the file goes
     untouched for too long.
     """
+    _assert_safe_id(run_id)
     log_path = pipeline.events_log(run_id)
 
     async def gen():

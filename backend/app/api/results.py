@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -32,6 +33,13 @@ from app.storage.fs_layout import logs_dir, run_dir, traces_dir
 router = APIRouter()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+_SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _assert_safe_id(run_id: str) -> None:
+    if not _SAFE_ID_RE.match(run_id):
+        raise HTTPException(400, f"Invalid run_id: {run_id!r}")
 
 
 # ---------- helpers ---------------------------------------------------------
@@ -108,6 +116,7 @@ class Summary(BaseModel):
 
 @router.get("/{run_id}/summary", response_model=Summary)
 def get_summary(run_id: str) -> Summary:
+    _assert_safe_id(run_id)
     if not run_dir(run_id).exists():
         raise HTTPException(404, f"Run {run_id} not found.")
 
@@ -152,6 +161,7 @@ StatsView = Literal["per_npu", "per_collective", "per_collective_agg"]
 
 @router.get("/{run_id}/stats")
 def get_stats(run_id: str, view: StatsView = "per_npu") -> JSONResponse:
+    _assert_safe_id(run_id)
     if not run_dir(run_id).exists():
         raise HTTPException(404, f"Run {run_id} not found.")
     if view == "per_npu":
@@ -180,6 +190,7 @@ def get_timeline(run_id: str) -> JSONResponse:
     the analytical backend), but matches the cycle counts and surfaces the
     workload composition.
     """
+    _assert_safe_id(run_id)
     if not run_dir(run_id).exists():
         raise HTTPException(404, f"Run {run_id} not found.")
     npu_stats = _ensure_stats(run_id)
@@ -250,6 +261,7 @@ def get_timeline(run_id: str) -> JSONResponse:
 
 @router.get("/{run_id}/spec")
 def get_spec(run_id: str) -> JSONResponse:
+    _assert_safe_id(run_id)
     p = _spec_path(run_id)
     if not p.exists():
         raise HTTPException(404, f"spec.json missing for run {run_id}.")
@@ -261,6 +273,7 @@ def get_spec_yaml(run_id: str):
     """YAML export for reproducibility (plan.md §6)."""
     import yaml
 
+    _assert_safe_id(run_id)
     p = _spec_path(run_id)
     if not p.exists():
         raise HTTPException(404, f"spec.json missing for run {run_id}.")
@@ -273,9 +286,12 @@ def get_spec_yaml(run_id: str):
 
 @router.get("/{run_id}/logs/{name}")
 def get_log(run_id: str, name: str) -> FileResponse:
+    _assert_safe_id(run_id)
     if not name.replace(".", "").replace("_", "").isalnum():
         raise HTTPException(400, "Log name contains forbidden characters.")
-    p = logs_dir(run_id) / name
+    p = (logs_dir(run_id) / name).resolve()
+    if not str(p).startswith(str(logs_dir(run_id).resolve())):
+        raise HTTPException(400, "Path traversal detected.")
     if not p.exists():
         raise HTTPException(404, f"Log {name} not found.")
     return FileResponse(p, media_type="text/plain", filename=p.name)
@@ -315,6 +331,8 @@ def _flatten(obj, prefix: str = "") -> dict[str, object]:
 
 @router.get("/{run_id}/compare", response_model=CompareResult)
 def compare_runs(run_id: str, with_: str = Query(..., alias="with")) -> CompareResult:
+    _assert_safe_id(run_id)
+    _assert_safe_id(with_)
     a_summary = get_summary(run_id)
     b_summary = get_summary(with_)
     a_spec = json.loads(_spec_path(run_id).read_text()) if _spec_path(run_id).exists() else {}
