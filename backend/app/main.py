@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
 
     app.include_router(workload.router, prefix="/workloads", tags=["workloads"])
     app.include_router(system.router, prefix="/configs", tags=["configs"])
+    app.include_router(system.backends_router, tags=["backends"])
     app.include_router(runs.router, prefix="/runs", tags=["runs"])
     app.include_router(results.router, prefix="/results", tags=["results"])
 
