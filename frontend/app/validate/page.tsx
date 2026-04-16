@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { TopologyView } from "@/components/topology/TopologyView";
 import {
@@ -21,10 +21,21 @@ const REFERENCE_4NPU_PREFIX =
   "frameworks/astra-sim/examples/workload/microbenchmarks/reduce_scatter/4npus_1MB/reduce_scatter";
 
 export default function ValidatePage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-zinc-500">Loading...</p>}>
+      <ValidateContent />
+    </Suspense>
+  );
+}
+
+function ValidateContent() {
+  const searchParams = useSearchParams();
+  const initialPrefix = searchParams.get("workload") ?? REFERENCE_4NPU_PREFIX;
+
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [workload, setWorkload] = useState<WorkloadRef>({
     kind: "existing",
-    value: REFERENCE_4NPU_PREFIX,
+    value: initialPrefix,
   });
   const [bundle, setBundle] = useState<ConfigBundle>({
     backend: "analytical_cu",

@@ -143,19 +143,21 @@ Start the backend and frontend as described in [Section 1.4](#14-starting-the-de
 5. Notice the **Total NPUs: 4** indicator updates
 6. Click **"Generate 4 traces"**
 7. Wait for the green success panel showing run_id and trace file paths
+8. Click **"Configure System →"** in the result panel — this carries your workload context forward
 
 ### Step 3: Configure the system
-1. Navigate to **http://localhost:3000/system**
-2. Keep the defaults: **Ring** topology, **4 NPUs**, **50 GB/s** bandwidth, **500 ns** latency
-3. Verify the topology SVG preview shows 4 nodes in a ring
-4. Click **"Materialize"** to write the config files
+1. You arrive at the **System** page with a blue **workload context banner** showing **4 NPUs (DP=2 × TP=2)**
+2. The NPU count and expected NPU cross-check are auto-filled from your workload
+3. Keep the defaults: **Ring** topology, **50 GB/s** bandwidth, **500 ns** latency
+4. Verify the topology SVG preview shows 4 nodes in a ring
+5. Click **"Materialize configs"** to write the config files
+6. Click **"Continue to Validate →"** in the green success box
 
 ### Step 4: Validate and run
-1. Navigate to **http://localhost:3000/validate**
-2. Select your generated workload prefix from the quick-pick buttons
-3. Check the summary cards: Traces (4), NPUs (4, green match), Binary (ready)
-4. Verify the green **"Pre-flight OK"** banner appears
-5. Click **"Start run →"**
+1. You arrive at the **Validate** page with your workload prefix pre-filled
+2. Check the summary cards: Traces (4), NPUs (4, green match), Binary (ready)
+3. Verify the green **"Pre-flight OK"** banner appears
+4. Click **"Start run →"**
 
 ### Step 5: Monitor
 You're redirected to the **Run Monitor** page (`/run/[id]`).
@@ -194,16 +196,21 @@ Clicking a **succeeded** run goes to Results; other statuses go to the Run Monit
 Two tabs for managing workload traces:
 
 #### "Select existing" tab
-A table of all available `.et` trace files from two sources:
-- **examples**: bundled microbenchmarks in `frameworks/astra-sim/examples/workload/`
-- **run**: traces from previous workload generation runs
+A table of available workloads grouped by trace prefix. Individual `.et` files (one per NPU) are aggregated into workload groups:
 
 | Column | Description |
 |--------|-------------|
+| (radio) | Select this workload for use in validation |
 | Source | `examples` or `run` |
-| Name | Trace file name (e.g., `all_reduce.0.et`) |
-| Run ID | Associated run ID (null for examples) |
-| Size | File size in bytes/KB/MB |
+| Workload | Trace prefix name (e.g., `microbenchmarks/reduce_scatter/4npus_1MB/reduce_scatter`) |
+| Traces | Number of `.et` files in this workload group (one per NPU) |
+| Total size | Combined size of all trace files |
+
+Click a row or its radio button to select a workload, then click **"Continue to Validate →"** to navigate to the Validate page with the workload pre-filled.
+
+Workload sources:
+- **examples**: bundled microbenchmarks in `frameworks/astra-sim/examples/workload/`
+- **run**: traces from previous workload generation runs
 
 #### "Generate new" tab
 Create new workload traces using STG (Symbolic Tensor Graph):
@@ -216,7 +223,7 @@ Create new workload traces using STG (Symbolic Tensor Graph):
 6. **Total NPUs indicator**: computed as `DP × TP × SP × PP × EP`
 7. **Toggle flags**: weight_sharded, activation_recompute, tpsp, mixed_precision
 8. **Generate button**: starts trace generation (takes 10–60 seconds)
-9. **Result panel**: shows run_id, list of generated trace files, stdout output
+9. **Result panel**: shows run_id, list of generated trace files, stdout output. After successful generation, a **"Configure System →"** button appears with a context summary (e.g., "Next: configure system for 4 NPUs (DP=2 × TP=2 × SP=1 × PP=1)"). Clicking it navigates to the System page with workload context pre-filled via URL parameters.
 
 ### 3.3 Model Presets (`/model`)
 
@@ -237,26 +244,27 @@ Each card has a **"Use in workload →"** button linking to the Workload page.
 A two-column layout for configuring the simulation environment:
 
 #### Left column — Configuration
+- **Workload context banner** (conditional): when arriving from the Workload page via "Configure System →", a blue banner shows the parallelism dimensions (e.g., "**4 NPUs** — DP=2 × TP=2 × SP=1 × PP=1") and the workload prefix. The network NPU count and "Expected NPU count" cross-check are auto-filled to match. The banner is dismissible with ×. When accessing the page directly (no URL params), no banner appears and the page works as before.
 - **Backend picker**: dropdown selecting the simulation backend (Analytical Congestion Unaware, Analytical Congestion Aware, or NS-3 stub). Shows "built" or "needs build" status.
 - **Network section**: multi-dimensional topology editor
   - Each dimension row has: topology type (Ring/FullyConnected/Switch), NPU count, bandwidth (GB/s), latency (ns), delete button
   - **"+ add dim"** button adds a new dimension with defaults (Ring, 2 NPUs, 50 GB/s, 500 ns)
   - Total NPUs = product of all dimension NPU counts
 - **System section**: scheduling policy (LIFO/FIFO), endpoint-delay, active-chunks-per-dimension, preferred-dataset-splits, local-mem-bw, boost-mode, four collective implementation fields, collective-optimization
-- **Memory note**: currently fixed to NO_MEMORY_EXPANSION
-- **Materialize button**: writes config files to disk (creates a run directory)
+- **Memory section**: remote memory architecture type selector with conditional fields (see [Section 5.3](#53-memory-configuration))
+- **Materialize button**: writes config files to disk (creates a run directory). Disabled when validation errors exist.
 
 #### Right column — Preview & validation
 - **Topology SVG**: live visualization of the network topology (Ring, FullyConnected, or Switch)
 - **Issue list**: validation errors (red), warnings (amber), and info (gray) from real-time validation
-- **Materialized output**: green success box with run_id and file paths after materialization
+- **Materialized output**: green success box with run_id, file paths, and a **"Continue to Validate →"** button that navigates to the Validate page with the workload prefix pre-filled
 
 ### 3.5 Validate & Run (`/validate`)
 
 Pre-flight checks and simulation launch:
 
 #### Left column
-- **Workload prefix input**: text input with quick-select buttons for available trace prefixes
+- **Workload prefix input**: text input with quick-select buttons for available trace prefixes. The workload is pre-filled when navigating from the Workload page ("Continue to Validate →") or the System page ("Continue to Validate →") via the `?workload=` URL parameter.
 - **Network override fields**: inline dimension-0 settings (NPUs, bandwidth, latency, all-reduce implementation)
 - **Topology preview**: SVG of the configured topology
 - **Summary cards** (4 cards):
@@ -323,13 +331,13 @@ Table of every collective operation extracted from `.et` traces:
 | Bytes | Data size of the collective |
 
 #### Timeline tab
-- Download link for **Chrome Tracing JSON**
+- Click **"Download timeline.json"** to save the Chrome Tracing JSON file (the backend sends a `Content-Disposition: attachment` header to force download)
 - Open the downloaded file at [ui.perfetto.dev](https://ui.perfetto.dev) or `chrome://tracing`
 - Shows compute and communication bands per NPU, plus collective instant markers
 - Note: timestamps are approximate (analytical backend doesn't emit per-collective timing)
 
 #### Logs tab
-Direct links to raw log files:
+Each log file has an **"open"** link that opens the file in a new browser tab for inline viewing:
 - `log.log` — ASTRA-sim's own output
 - `stdout.log` — merged stdout/stderr from the simulation process
 - `err.log` — stderr only
@@ -524,12 +532,66 @@ The list supports one entry per network dimension. For multi-dimensional network
 
 ### 5.3 Memory Configuration
 
-Currently only one option:
+ASTRA-sim supports four remote memory architecture types:
+
+| Type | Description |
+|------|-------------|
+| **NO_MEMORY_EXPANSION** | No remote memory access (default). No additional fields needed. |
+| **PER_NODE_MEMORY_EXPANSION** | Each node has dedicated remote memory. Transactions are serialized per node. |
+| **PER_NPU_MEMORY_EXPANSION** | Each NPU has independent remote memory access. No serialization. |
+| **MEMORY_POOL** | Single shared memory pool across all NPUs. Transactions are serialized globally. |
+
+#### Common fields (for all expansion types)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `remote-mem-latency` | int | 0 | Remote memory access latency in **nanoseconds** |
+| `remote-mem-bw` | int | 0 | Remote memory bandwidth in **GB/s** (must be > 0 for expansion types) |
+
+#### PER_NODE_MEMORY_EXPANSION additional fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `num-nodes` | int | — | Number of nodes (must be ≥ 1) |
+| `num-npus-per-node` | int | — | NPUs per node (must be ≥ 1) |
+
+#### Memory runtime model
+
+For all expansion types, the remote memory access time is calculated as:
+```
+runtime = remote-mem-latency + (tensor_size / remote-mem-bw)
+```
+
+#### Example configurations
+
+**No expansion** (default):
 ```json
 { "memory-type": "NO_MEMORY_EXPANSION" }
 ```
 
-Remote memory expansion types may be added in future phases.
+**Per-node expansion** (4 nodes, 8 NPUs each):
+```json
+{
+  "memory-type": "PER_NODE_MEMORY_EXPANSION",
+  "remote-mem-latency": 100,
+  "remote-mem-bw": 50,
+  "num-nodes": 4,
+  "num-npus-per-node": 8
+}
+```
+
+**Memory pool** (shared):
+```json
+{
+  "memory-type": "MEMORY_POOL",
+  "remote-mem-latency": 200,
+  "remote-mem-bw": 100
+}
+```
+
+#### UI behavior
+
+In the System page, selecting a memory type other than **No memory expansion** reveals the latency and bandwidth fields. Selecting **Per-node expansion** additionally reveals the `num-nodes` and `npus-per-node` fields. Switching back to a simpler type clears the irrelevant fields automatically.
 
 ### 5.4 Backend Selection
 
@@ -554,6 +616,8 @@ The **Validate & Run** page (`/validate`) performs these checks before allowing 
 | Binary present | error | Selected backend binary must be built |
 | Collective known | warning | Unknown collective implementations trigger a warning |
 | Switch min NPUs | error | Switch topology requires ≥ 2 NPUs |
+| Memory bandwidth | error | `remote-mem-bw` must be > 0 for memory expansion types |
+| Per-node fields | error | `num-nodes` and `num-npus-per-node` must be ≥ 1 for PER_NODE_MEMORY_EXPANSION |
 
 A run **cannot start** if any error-severity issue exists. Warnings are informational.
 
@@ -722,4 +786,8 @@ Use the Compare tab to analyze differences between two simulation runs:
 | **Mixed Precision** | Training with lower precision (FP16/BF16) for speed while maintaining accuracy with FP32 master weights |
 | **Micro-batch** | Subdivision of a mini-batch for pipeline parallelism; each micro-batch flows through pipeline stages |
 | **Collective** | A communication pattern where multiple NPUs participate (as opposed to point-to-point) |
+| **Remote Memory Expansion** | Simulated remote memory subsystem that models off-chip or off-node memory access with configurable latency and bandwidth |
+| **PER_NODE_MEMORY_EXPANSION** | Memory architecture where each node has dedicated remote memory; transactions within a node are serialized |
+| **PER_NPU_MEMORY_EXPANSION** | Memory architecture where each NPU has independent remote memory access with no serialization |
+| **MEMORY_POOL** | Shared memory pool architecture where all NPUs share one memory with globally serialized transactions |
 | **SSE** | Server-Sent Events — HTTP-based protocol for server-to-client event streaming |

@@ -247,12 +247,21 @@ def get_timeline(run_id: str) -> JSONResponse:
             }
         )
 
-    return JSONResponse(
-        content={
+    from fastapi.responses import Response
+
+    body = json.dumps(
+        {
             "displayTimeUnit": "ns",
             "metadata": {"run_id": run_id, "npu_count": len(npu_stats)},
             "traceEvents": events,
         }
+    )
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="timeline-{run_id}.json"',
+        },
     )
 
 
@@ -294,7 +303,7 @@ def get_log(run_id: str, name: str) -> FileResponse:
         raise HTTPException(400, "Path traversal detected.")
     if not p.exists():
         raise HTTPException(404, f"Log {name} not found.")
-    return FileResponse(p, media_type="text/plain", filename=p.name)
+    return FileResponse(p, media_type="text/plain")
 
 
 # ---------- comparison ------------------------------------------------------

@@ -79,7 +79,7 @@ Simulation_interface/
 │   │   │   ├── stg_spec.py      # STG workload specification (83 lines)
 │   │   │   ├── network_config.py # Network topology model (84 lines)
 │   │   │   ├── system_config.py # System parameters model (64 lines)
-│   │   │   ├── memory_config.py # Memory config model (22 lines)
+│   │   │   ├── memory_config.py # Memory config model — 4 memory types (45 lines)
 │   │   │   └── presets/         # JSON preset files
 │   │   │       ├── llama-7b.json
 │   │   │       ├── llama-70b.json
@@ -147,7 +147,7 @@ Every page is a client component (`"use client"`) using React hooks for state an
 | `app/page.tsx` | `/` | `healthCheck()`, `listRuns()` | Dashboard |
 | `app/workload/page.tsx` | `/workload` | `listWorkloadLibrary()`, `listPresets()`, `generateWorkload()`, `defaultStgSpec()` | Workload management |
 | `app/model/page.tsx` | `/model` | `listPresets()` | Preset viewer |
-| `app/system/page.tsx` | `/system` | `listBackends()`, `validateConfigs()`, `materializeConfigs()`, `defaultSystemConfig()`, `defaultNetworkConfig()`, `defaultMemoryConfig()` | Config editor |
+| `app/system/page.tsx` | `/system` | `listBackends()`, `validateConfigs()`, `materializeConfigs()`, `defaultSystemConfig()`, `defaultNetworkConfig()`, `defaultMemoryConfig()` + `useSearchParams()` for workload context | Config editor |
 | `app/validate/page.tsx` | `/validate` | `listWorkloadLibrary()`, `validateRun()`, `startRun()`, `defaultMemoryConfig()`, `defaultNetworkConfig()`, `defaultSystemConfig()` | Pre-flight + launch |
 | `app/run/[id]/page.tsx` | `/run/{id}` | `getRun()`, `cancelRun()`, `eventsUrl()` (SSE) | Run monitoring |
 | `app/results/[id]/page.tsx` | `/results/{id}` | `getSummary()`, `getStats()`, `compareRuns()`, `timelineUrl()`, `logUrl()` | Results analysis |
@@ -183,6 +183,12 @@ No global state library. Each page manages state locally:
 - **`useEffect`** for side effects (initial data fetch, debounced validation, SSE connections)
 - **`useRef`** for DOM refs (log scroll target, EventSource connection)
 - **`useMemo`** for derived values (totalNpus, prefixOptions, errorDimIdx)
+- **`useSearchParams`** for reading URL query params (requires `<Suspense>` wrapper for Next.js 14 static prerendering)
+
+**Cross-page communication** uses URL query params — no shared state store:
+- Workload → System: `?npus=4&dp=2&tp=2&sp=1&pp=1&ep=1&workload=<prefix>` (auto-fills NPU count)
+- Workload → Validate: `?workload=<prefix>` (pre-fills workload selector)
+- System → Validate: `?workload=<prefix>` (pre-fills workload selector)
 
 **Debounced validation pattern** (used in `/system` and `/validate`):
 ```typescript
@@ -229,6 +235,8 @@ Each page defines inline sub-components. Key patterns:
 | `IssueList` | system, validate | Color-coded validation issues |
 | `StatusBadge` | run | Status label with color |
 | `Banner` | validate | Green/amber status bar |
+| `WorkloadContextBanner` | system | Blue banner showing parallelism dims from URL params |
+| `GenerateNextStep` | workload | Context summary + "Configure System →" link in result panel |
 
 ### 2.6 Design System
 
@@ -263,7 +271,7 @@ app/
 │   ├── stg_spec.py      # StgSpec: workload generation parameters
 │   ├── network_config.py # NetworkConfig: multi-dim topology
 │   ├── system_config.py # SystemConfig: ASTRA-sim system params
-│   └── memory_config.py # MemoryConfig: memory expansion type
+│   └── memory_config.py # MemoryConfig: 4 memory types + latency/bw/node fields
 ├── orchestrator/        # Subprocess lifecycle management
 │   ├── pipeline.py      # State machine: queued→building→running→done
 │   ├── astra_runner.py  # ASTRA-sim binary: Popen + streaming + cancel
@@ -633,10 +641,30 @@ latency: [ 500.0, 1000.0 ]  # ns
 }
 ```
 
-**Memory (JSON)**: `MemoryConfig.to_json_dict()`:
+**Memory (JSON)**: `MemoryConfig.to_json_dict()` conditionally includes fields based on memory type:
+
 ```json
+// NO_MEMORY_EXPANSION — minimal
 { "memory-type": "NO_MEMORY_EXPANSION" }
+
+// PER_NODE_MEMORY_EXPANSION — includes node topology
+{
+  "memory-type": "PER_NODE_MEMORY_EXPANSION",
+  "remote-mem-latency": 100,
+  "remote-mem-bw": 50,
+  "num-nodes": 4,
+  "num-npus-per-node": 8
+}
+
+// PER_NPU_MEMORY_EXPANSION or MEMORY_POOL — latency + bandwidth only
+{
+  "memory-type": "MEMORY_POOL",
+  "remote-mem-latency": 200,
+  "remote-mem-bw": 100
+}
 ```
+
+Supported memory types: `NO_MEMORY_EXPANSION`, `PER_NODE_MEMORY_EXPANSION`, `PER_NPU_MEMORY_EXPANSION`, `MEMORY_POOL`. See `AnalyticalRemoteMemory.cc` in the ASTRA-sim submodule for the C++ implementation.
 
 ---
 

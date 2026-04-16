@@ -121,7 +121,19 @@ export type SystemConfig = {
   "peak-perf"?: number;
 };
 
-export type MemoryConfig = { "memory-type": "NO_MEMORY_EXPANSION" };
+export type MemoryType =
+  | "NO_MEMORY_EXPANSION"
+  | "PER_NODE_MEMORY_EXPANSION"
+  | "PER_NPU_MEMORY_EXPANSION"
+  | "MEMORY_POOL";
+
+export type MemoryConfig = {
+  "memory-type": MemoryType;
+  "remote-mem-latency": number;
+  "remote-mem-bw": number;
+  "num-nodes"?: number | null;
+  "num-npus-per-node"?: number | null;
+};
 
 export type ConfigBundle = {
   backend: string;
@@ -317,7 +329,13 @@ export const defaultNetworkConfig = (): NetworkConfig => ({
   latency: [500.0],
 });
 
-export const defaultMemoryConfig = (): MemoryConfig => ({ "memory-type": "NO_MEMORY_EXPANSION" });
+export const defaultMemoryConfig = (): MemoryConfig => ({
+  "memory-type": "NO_MEMORY_EXPANSION",
+  "remote-mem-latency": 0,
+  "remote-mem-bw": 0,
+  "num-nodes": null,
+  "num-npus-per-node": null,
+});
 
 export const defaultStgSpec = (): StgSpec => ({
   model_type: "dense",
