@@ -1,21 +1,31 @@
 """Run lifecycle routes.
 
-Phase 3 ships /runs/validate (the unified pre-flight check). Phase 4 will
-add /runs to start an actual simulation.
+- POST /runs/validate          unified pre-flight (Phase 3)
+- POST /runs                   start a run (materialize → build → simulate)
+- GET  /runs/{id}              status snapshot
+- GET  /runs/{id}/events       SSE stream of log lines + status
+- POST /runs/{id}/cancel       SIGTERM a live run
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlmodel import Session
 
 from app.api.system import ConfigBundle
 from app.build.backend_adapter import get_backend, is_built
-from app.storage.fs_layout import traces_dir
+from app.orchestrator import astra_runner, pipeline
+from app.storage.fs_layout import new_run_id, run_dir, traces_dir
+from app.storage.registry import Run, get_engine
 
 router = APIRouter()
 
@@ -265,3 +275,128 @@ def _smoke_run(adapter) -> SmokeRunResult:
 @router.post("/validate", response_model=RunValidateResponse)
 def validate_run(req: RunValidateRequest) -> RunValidateResponse:
     return _validate(req)
+
+
+# ===== Phase 4: start / status / events / cancel ============================
+
+
+class StartRunRequest(BaseModel):
+    workload: WorkloadRef
+    bundle: ConfigBundle
+
+
+class StartRunResponse(BaseModel):
+    run_id: str
+    status: str
+
+
+class RunStatus(BaseModel):
+    run_id: str
+    status: str
+    config_dir: str | None = None
+    log_dir: str | None = None
+
+
+@router.post("", response_model=StartRunResponse)
+def start_run(req: StartRunRequest) -> StartRunResponse:
+    # Resolve workload prefix the same way validate does, but reject paths
+    # that escape the repo root.
+    prefix, traces = _resolve_workload(req.workload)
+    if not traces:
+        raise HTTPException(400, f"No .et files at {prefix}.*.et")
+    safe_prefix = pipeline.assert_repo_path(prefix)
+
+    # NPU consistency hard-gate (do not start a run we already know will fail).
+    expected = req.bundle.network.total_npus
+    if len(traces) != expected:
+        raise HTTPException(
+            400,
+            f"Workload has {len(traces)} traces but network expects {expected}.",
+        )
+
+    run_id = new_run_id()
+    pipeline._set_status(run_id, "queued")
+    pipeline.execute_pipeline_async(run_id, req.bundle, safe_prefix)
+    return StartRunResponse(run_id=run_id, status="queued")
+
+
+@router.get("/{run_id}", response_model=RunStatus)
+def get_run(run_id: str) -> RunStatus:
+    with Session(get_engine()) as session:
+        row = session.get(Run, run_id)
+    if row is None:
+        raise HTTPException(404, f"Run {run_id} not found.")
+    return RunStatus(
+        run_id=run_id,
+        status=row.status,
+        config_dir=str(run_dir(run_id) / "configs"),
+        log_dir=str(run_dir(run_id) / "logs"),
+    )
+
+
+@router.post("/{run_id}/cancel")
+def cancel_run(run_id: str) -> dict[str, bool]:
+    ok = astra_runner.cancel_run(run_id)
+    if ok:
+        pipeline.append_event(run_id, "log", text="[cancel] SIGTERM sent")
+    return {"signalled": ok}
+
+
+@router.get("/{run_id}/events")
+async def stream_events(run_id: str) -> StreamingResponse:
+    """SSE stream that tails runs/<id>/logs/events.log.
+
+    Replays the file from the start (so a refresh shows full history),
+    then tails new lines until a `done` event lands or the file goes
+    untouched for too long.
+    """
+    log_path = pipeline.events_log(run_id)
+
+    async def gen():
+        # Wait briefly for the file to appear if the run just started.
+        for _ in range(50):
+            if log_path.exists():
+                break
+            await asyncio.sleep(0.1)
+        if not log_path.exists():
+            yield _sse({"kind": "error", "text": f"events log {log_path} missing"})
+            return
+
+        offset = 0
+        idle_since = time.time()
+        last_done_seen = False
+        while True:
+            try:
+                with log_path.open("r") as f:
+                    f.seek(offset)
+                    chunk = f.read()
+                    offset = f.tell()
+            except FileNotFoundError:
+                break
+            if chunk:
+                idle_since = time.time()
+                for line in chunk.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    yield _sse(rec)
+                    if rec.get("kind") == "done":
+                        last_done_seen = True
+            if last_done_seen:
+                # Give the client a beat to receive the final event.
+                await asyncio.sleep(0.2)
+                return
+            # 5 min of silence with no `done` → assume the writer crashed.
+            if time.time() - idle_since > 300:
+                yield _sse({"kind": "error", "text": "stream idle 5 min, closing"})
+                return
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _sse(data: dict) -> str:
+    return f"data: {json.dumps(data)}\n\n"
