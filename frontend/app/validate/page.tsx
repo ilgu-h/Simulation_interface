@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { TopologyView } from "@/components/topology/TopologyView";
@@ -8,6 +9,7 @@ import {
   defaultNetworkConfig,
   defaultSystemConfig,
   listWorkloadLibrary,
+  startRun,
   validateRun,
   type ConfigBundle,
   type LibraryEntry,
@@ -78,6 +80,20 @@ export default function ValidatePage() {
       setError((e as Error).message);
     } finally {
       setSmokeBusy(false);
+    }
+  };
+
+  const router = useRouter();
+  const [starting, setStarting] = useState(false);
+  const onStartRun = async () => {
+    setStarting(true);
+    setError(null);
+    try {
+      const r = await startRun({ workload, bundle });
+      router.push(`/run/${r.run_id}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setStarting(false);
     }
   };
 
@@ -242,13 +258,22 @@ export default function ValidatePage() {
             />
           </div>
 
-          <button
-            onClick={onSmoke}
-            disabled={smokeBusy || errors.length > 0}
-            className="w-full rounded bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 transition hover:bg-white disabled:opacity-50"
-          >
-            {smokeBusy ? "Running smoke..." : "Run 4-NPU smoke (uses bundled microbenchmark)"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onSmoke}
+              disabled={smokeBusy || errors.length > 0}
+              className="flex-1 rounded border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-200 transition hover:border-zinc-500 disabled:opacity-50"
+            >
+              {smokeBusy ? "Running smoke..." : "Smoke (4-NPU bundled)"}
+            </button>
+            <button
+              onClick={onStartRun}
+              disabled={starting || errors.length > 0}
+              className="flex-1 rounded bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 transition hover:bg-white disabled:opacity-50"
+            >
+              {starting ? "Starting..." : "Start run →"}
+            </button>
+          </div>
 
           {result?.smoke && (
             <div

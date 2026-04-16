@@ -194,6 +194,37 @@ export type RunValidateResponse = {
 export const validateRun = (req: RunValidateRequest): Promise<RunValidateResponse> =>
   postJson<RunValidateResponse>("/runs/validate", req);
 
+export type StartRunRequest = { workload: WorkloadRef; bundle: ConfigBundle };
+
+export type StartRunResponse = { run_id: string; status: string };
+
+export const startRun = (req: StartRunRequest): Promise<StartRunResponse> =>
+  postJson<StartRunResponse>("/runs", req);
+
+export type RunStatusValue =
+  | "queued"
+  | "building"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type RunStatus = {
+  run_id: string;
+  status: RunStatusValue;
+  config_dir: string | null;
+  log_dir: string | null;
+};
+
+export const getRun = (run_id: string): Promise<RunStatus> =>
+  getJson<RunStatus>(`/runs/${run_id}`);
+
+export const cancelRun = (run_id: string): Promise<{ signalled: boolean }> =>
+  postJson(`/runs/${run_id}/cancel`, {});
+
+export const eventsUrl = (run_id: string): string =>
+  `${backendUrl()}/runs/${run_id}/events`;
+
 export const defaultSystemConfig = (): SystemConfig => ({
   "scheduling-policy": "LIFO",
   "endpoint-delay": 10,
