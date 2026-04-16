@@ -18,9 +18,34 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # app/parsers/et_traces.py imports chakra.schema.protobuf.et_def_pb2,
+      # so the chakra submodule must be present, patched, compiled, and
+      # installed as an editable package. Mirrors scripts/bootstrap.sh but
+      # stays lightweight (avoids astra-sim + symbolic_tensor_graph, which
+      # are only needed for smoke tests).
+      - name: Install chakra (et_traces dependency)
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends protobuf-compiler
+          git submodule update --init --depth 1 frameworks/chakra
+          # Strip [build_grpc] cmdclass so pip install does not need
+          # grpc-tools (mirrors scripts/bootstrap.sh section 3b).
+          cat > frameworks/chakra/setup.cfg <<'EOF'
+          # Local patch (CI): see scripts/bootstrap.sh for rationale.
+          EOF
+          cat > frameworks/chakra/setup.py <<'EOF'
+          from setuptools import setup
+          setup()
+          EOF
+          protoc --proto_path=frameworks/chakra/schema/protobuf \
+                 --python_out=frameworks/chakra/schema/protobuf \
+                 frameworks/chakra/schema/protobuf/et_def.proto
+          python -m pip install --upgrade pip
+          pip install -e frameworks/chakra
       - name: Install backend (dev)
         run: |
-          python -m pip install --upgrade pip
           pip install pytest-cov -e .[dev]
       - name: Lint
         run: ruff check .
