@@ -56,6 +56,29 @@ function parseWorkloadContext(params: URLSearchParams): WorkloadContext | null {
   };
 }
 
+type DerivedDim = { label: string; count: number };
+
+/** Derive per-dim network topology from parallelism context.
+ *
+ * Each parallelism axis with value > 1 becomes one network dimension. When
+ * every axis is 1, fall back to a single Ring spanning all NPUs so that
+ * existing flat workloads keep working.
+ */
+function deriveDimsFromParallelism(ctx: WorkloadContext): DerivedDim[] {
+  const candidates: DerivedDim[] = [
+    { label: "DP", count: ctx.dp },
+    { label: "TP", count: ctx.tp },
+    { label: "SP", count: ctx.sp },
+    { label: "PP", count: ctx.pp },
+    { label: "EP", count: ctx.ep },
+  ];
+  const active = candidates.filter((d) => d.count > 1);
+  if (active.length === 0) {
+    return [{ label: "flat", count: ctx.npus }];
+  }
+  return active;
+}
+
 function SystemContent() {
   const searchParams = useSearchParams();
   const workloadCtx = useMemo(() => parseWorkloadContext(searchParams), [searchParams]);
@@ -69,6 +92,10 @@ function SystemContent() {
     memory: defaultMemoryConfig(),
     expected_npus: null,
   });
+  // Per-dim labels ("DP", "TP", ...) derived once on mount from URL params.
+  // Not in ConfigBundle because these are UI-only hints; the network config
+  // itself is positional.
+  const [dimLabels, setDimLabels] = useState<string[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [validating, setValidating] = useState(false);
   const [materialized, setMaterialized] = useState<MaterializeResponse | null>(null);
@@ -78,14 +105,18 @@ function SystemContent() {
     listBackends().then(setBackends).catch((e) => setError((e as Error).message));
   }, []);
 
-  // Auto-fill NPU count + expected_npus from workload context (on mount only).
+  // Derive multi-dim network topology from parallelism context (mount only).
   useEffect(() => {
     if (!workloadCtx) return;
+    const dims = deriveDimsFromParallelism(workloadCtx);
+    setDimLabels(dims.map((d) => d.label));
     setBundle((prev) => ({
       ...prev,
       network: {
-        ...prev.network,
-        npus_count: [workloadCtx.npus, ...prev.network.npus_count.slice(1)],
+        topology: dims.map(() => "Ring"),
+        npus_count: dims.map((d) => d.count),
+        bandwidth: dims.map(() => 50.0),
+        latency: dims.map(() => 500.0),
       },
       expected_npus: workloadCtx.npus,
     }));
@@ -162,7 +193,14 @@ function SystemContent() {
             onChange={(b) => setBundle({ ...bundle, backend: b })}
           />
 
-          <NetworkSection network={bundle.network} onChange={setNetwork} />
+          <NetworkSection
+            network={bundle.network}
+            dimLabels={dimLabels}
+            onChange={(next, nextLabels) => {
+              setNetwork(next);
+              if (nextLabels) setDimLabels(nextLabels);
+            }}
+          />
 
           <SystemSection system={bundle.system} onChange={setSystem} />
 
@@ -320,10 +358,12 @@ function BackendPicker({
 
 function NetworkSection({
   network,
+  dimLabels,
   onChange,
 }: {
   network: NetworkConfig;
-  onChange: (n: NetworkConfig) => void;
+  dimLabels: string[];
+  onChange: (n: NetworkConfig, labels?: string[]) => void;
 }) {
   const setDim = (i: number, patch: Partial<{ topology: TopologyKind; npus_count: number; bandwidth: number; latency: number }>) => {
     const next: NetworkConfig = {
@@ -340,20 +380,31 @@ function NetworkSection({
   };
 
   const addDim = () =>
-    onChange({
-      topology: [...network.topology, "Ring"],
-      npus_count: [...network.npus_count, 2],
-      bandwidth: [...network.bandwidth, 50.0],
-      latency: [...network.latency, 500.0],
-    });
+    onChange(
+      {
+        topology: [...network.topology, "Ring"],
+        npus_count: [...network.npus_count, 2],
+        bandwidth: [...network.bandwidth, 50.0],
+        latency: [...network.latency, 500.0],
+      },
+      [...dimLabels, "custom"],
+    );
 
   const removeDim = (i: number) =>
-    onChange({
-      topology: network.topology.filter((_, idx) => idx !== i),
-      npus_count: network.npus_count.filter((_, idx) => idx !== i),
-      bandwidth: network.bandwidth.filter((_, idx) => idx !== i),
-      latency: network.latency.filter((_, idx) => idx !== i),
-    });
+    onChange(
+      {
+        topology: network.topology.filter((_, idx) => idx !== i),
+        npus_count: network.npus_count.filter((_, idx) => idx !== i),
+        bandwidth: network.bandwidth.filter((_, idx) => idx !== i),
+        latency: network.latency.filter((_, idx) => idx !== i),
+      },
+      dimLabels.filter((_, idx) => idx !== i),
+    );
+
+  const dimLabel = (i: number) => {
+    const tag = dimLabels[i];
+    return tag && tag !== "flat" ? `dim${i} (${tag}) topology` : `dim${i} topology`;
+  };
 
   return (
     <div className="space-y-3">
@@ -361,7 +412,7 @@ function NetworkSection({
       <div className="space-y-2">
         {network.topology.map((t, i) => (
           <div key={i} className="grid grid-cols-[1.4fr_1fr_1fr_1fr_auto] items-end gap-2">
-            <Field label={`dim${i} topology`}>
+            <Field label={dimLabel(i)}>
               <select
                 value={t}
                 onChange={(e) => setDim(i, { topology: e.target.value as TopologyKind })}

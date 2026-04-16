@@ -17,11 +17,16 @@ from pathlib import Path
 
 from app.build.backend_adapter import BackendAdapter
 
+# ASTRA-sim treats a comm_group path containing "empty" as "no comm groups"
+# (see frameworks/astra-sim/astra-sim/workload/Workload.cc initialize_comm_groups).
+COMM_GROUP_EMPTY: str = "empty"
+
 
 @dataclass(frozen=True)
 class AstraInvocation:
     binary: Path
     workload_prefix: Path
+    comm_group_config: Path | str
     system_config: Path
     network_config: Path
     memory_config: Path
@@ -31,11 +36,22 @@ class AstraInvocation:
         return [
             str(self.binary),
             f"--workload-configuration={self.workload_prefix}",
+            f"--comm-group-configuration={self.comm_group_config}",
             f"--system-configuration={self.system_config}",
             f"--network-configuration={self.network_config}",
             f"--remote-memory-configuration={self.memory_config}",
             f"--logging-folder={self.logging_folder}",
         ]
+
+
+def resolve_comm_group_config(workload_prefix: Path) -> Path | str:
+    """Return the sibling `{prefix}.json` if it exists, else the "empty" sentinel.
+
+    STG emits a comm-group JSON alongside `.et` trace shards; ASTRA-sim needs
+    it to resolve group IDs embedded in the traces.
+    """
+    candidate = workload_prefix.parent / f"{workload_prefix.name}.json"
+    return candidate if candidate.exists() else COMM_GROUP_EMPTY
 
 
 def build_invocation(
@@ -44,10 +60,17 @@ def build_invocation(
     workload_prefix: Path,
     config_dir: Path,
     logging_folder: Path,
+    comm_group_config: Path | str | None = None,
 ) -> AstraInvocation:
+    resolved_comm_group = (
+        comm_group_config
+        if comm_group_config is not None
+        else resolve_comm_group_config(workload_prefix)
+    )
     return AstraInvocation(
         binary=adapter.binary_path,
         workload_prefix=workload_prefix,
+        comm_group_config=resolved_comm_group,
         system_config=config_dir / "system.json",
         network_config=config_dir / "network.yml",
         memory_config=config_dir / "memory.json",

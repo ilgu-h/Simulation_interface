@@ -152,6 +152,11 @@ def execute_pipeline(run_id: str, bundle: ConfigBundle, workload_prefix: Path) -
         config_dir=cdir,
         logging_folder=logs_dir(run_id),
     )
+    append_event(
+        run_id,
+        "log",
+        text=f"[run] comm-group-configuration={invocation.comm_group_config}",
+    )
     append_event(run_id, "log", text=f"[run] {' '.join(invocation.cli())}")
 
     last_returncode: int | None = None
