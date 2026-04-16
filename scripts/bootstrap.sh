@@ -118,6 +118,9 @@ create_stg_env() {
   fi
   log "Creating conda env '${STG_ENV_NAME}' from ${STG_ENV_FILE}..."
   conda env create -n "${STG_ENV_NAME}" -f "${STG_ENV_FILE}"
+  # tqdm is imported by STG's graph module but missing from environment.yml.
+  log "Installing STG runtime extras (tqdm)..."
+  "${MINIFORGE_DIR}/envs/${STG_ENV_NAME}/bin/pip" install --quiet tqdm
   log "STG env ready."
 }
 
