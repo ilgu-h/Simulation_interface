@@ -156,6 +156,44 @@ export const validateConfigs = (b: ConfigBundle): Promise<ValidateResponse> =>
 export const materializeConfigs = (b: ConfigBundle): Promise<MaterializeResponse> =>
   postJson<MaterializeResponse>("/configs/materialize", b);
 
+export type WorkloadRef = {
+  kind: "existing" | "run";
+  value: string;
+  name?: string;
+};
+
+export type RunValidateRequest = {
+  workload: WorkloadRef;
+  bundle: ConfigBundle;
+  smoke_run?: boolean;
+};
+
+export type WorkloadSummary = {
+  prefix: string;
+  trace_count: number;
+  total_size_bytes: number;
+};
+
+export type SmokeRunResult = {
+  ran: boolean;
+  returncode: number | null;
+  stdout_tail: string;
+  stderr_tail: string;
+  duration_sec: number | null;
+};
+
+export type RunValidateResponse = {
+  ok: boolean;
+  issues: Issue[];
+  workload: WorkloadSummary | null;
+  binary_present: boolean;
+  smoke: SmokeRunResult | null;
+  estimated_run_seconds: number | null;
+};
+
+export const validateRun = (req: RunValidateRequest): Promise<RunValidateResponse> =>
+  postJson<RunValidateResponse>("/runs/validate", req);
+
 export const defaultSystemConfig = (): SystemConfig => ({
   "scheduling-policy": "LIFO",
   "endpoint-delay": 10,
