@@ -225,6 +225,69 @@ export const cancelRun = (run_id: string): Promise<{ signalled: boolean }> =>
 export const eventsUrl = (run_id: string): string =>
   `${backendUrl()}/runs/${run_id}/events`;
 
+// ---------- Phase 5 results --------------------------------------------------
+
+export type CollectiveAgg = {
+  comm_type: string;
+  count: number;
+  total_bytes: number;
+};
+
+export type RunSummary = {
+  run_id: string;
+  npu_count: number;
+  end_to_end_cycles: number;
+  slowest_npu: number | null;
+  avg_comm_fraction: number;
+  top_collectives: CollectiveAgg[];
+};
+
+export const getSummary = (run_id: string): Promise<RunSummary> =>
+  getJson<RunSummary>(`/results/${run_id}/summary`);
+
+export type PerNpuRow = {
+  npu_id: number;
+  wall_cycles: number;
+  comm_cycles: number;
+  compute_cycles: number;
+  exposed_comm_cycles: number;
+  comm_fraction: number;
+};
+
+export type PerCollectiveRow = {
+  npu_id: number;
+  node_id: number;
+  name: string;
+  comm_type: string;
+  comm_size_bytes: number;
+};
+
+export const getStats = <T = unknown>(
+  run_id: string,
+  view: "per_npu" | "per_collective" | "per_collective_agg",
+): Promise<T[]> => getJson<T[]>(`/results/${run_id}/stats?view=${view}`);
+
+export const timelineUrl = (run_id: string): string =>
+  `${backendUrl()}/results/${run_id}/timeline.json`;
+
+export const logUrl = (run_id: string, name: string): string =>
+  `${backendUrl()}/results/${run_id}/logs/${name}`;
+
+export type FieldDiff = { path: string; a: unknown; b: unknown };
+
+export type CompareResult = {
+  a: string;
+  b: string;
+  summary_a: RunSummary;
+  summary_b: RunSummary;
+  e2e_delta_cycles: number;
+  e2e_delta_pct: number;
+  config_diffs: FieldDiff[];
+};
+
+export const compareRuns = (a: string, b: string): Promise<CompareResult> =>
+  getJson<CompareResult>(`/results/${a}/compare?with=${b}`);
+
 export const defaultSystemConfig = (): SystemConfig => ({
   "scheduling-policy": "LIFO",
   "endpoint-delay": 10,
