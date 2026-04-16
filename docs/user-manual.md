@@ -106,15 +106,25 @@ Open your browser to **http://localhost:3000**.
 | `SIM_RUNS_DIR` | `<repo>/runs` | Where per-run artifacts are stored |
 | `STG_PYTHON` | `~/miniforge3/envs/stg-env/bin/python` | Python interpreter for STG |
 
-### 1.6 Docker (Experimental)
+### 1.6 Docker
 
-Docker files exist (`docker-compose.yml`, `docker/builder.Dockerfile`) but are **untested** on the current host. If Docker is available:
+Run the entire stack in containers with a single command:
 
 ```bash
 docker compose up --build
 # backend → http://localhost:8000
 # frontend → http://localhost:3000
 ```
+
+To run in the background:
+
+```bash
+docker compose up --build -d
+docker compose logs -f          # tail logs
+docker compose down             # stop all services
+```
+
+> **Note:** The Docker install should use the official apt repository (not snap) for full systemd integration. The `.dockerignore` file ensures host virtualenvs and `node_modules` do not interfere with the container build.
 
 ---
 
