@@ -108,6 +108,12 @@ class RunValidateResponse(BaseModel):
     )
 
 
+# Real STG-emitted comm-group JSONs are a flat rank-list map; they sit
+# comfortably under a hundred KB even for thousands of ranks. Refuse to
+# load anything oversized rather than allocate it into memory.
+_MAX_COMM_GROUP_BYTES = 10 * 1024 * 1024  # 10 MiB
+
+
 def _validate_comm_group(workload_prefix: Path) -> list[Issue]:
     """Inspect the sibling {prefix}.json that STG emits for comm-group IDs.
 
@@ -125,6 +131,27 @@ def _validate_comm_group(workload_prefix: Path) -> list[Issue]:
                 message=(
                     f"No comm-group file at {path.name}. ASTRA-sim will run "
                     "with no groups (fine for single-dim workloads)."
+                ),
+            )
+        ]
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return [
+            Issue(
+                severity="error",
+                field="workload.comm_group",
+                message=f"Failed to stat {path.name}: {exc}",
+            )
+        ]
+    if size > _MAX_COMM_GROUP_BYTES:
+        return [
+            Issue(
+                severity="error",
+                field="workload.comm_group",
+                message=(
+                    f"{path.name} is {size} bytes; refusing to load files "
+                    f"larger than {_MAX_COMM_GROUP_BYTES} bytes."
                 ),
             )
         ]

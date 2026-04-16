@@ -44,14 +44,23 @@ _STATS_COMPLETE_RE = re.compile(
 # on stderr (merged into stdout by stream_run) when the binary's destructor
 # chain hits corrupted memory. They are upstream bugs, not user-caused.
 _TEARDOWN_CRASH_PATTERNS = (
+    # glibc malloc diagnostics — specific enough that they cannot appear
+    # as legitimate simulation output.
     "malloc_consolidate",
     "double free",
     "free(): invalid pointer",
+    "free(): invalid next size",
     "free(): corrupted unsorted chunks",
+    "free(): corrupted size",
+    "malloc(): corrupted top size",
+    "realloc(): invalid pointer",
     "corrupted size vs. prev_size",
     "munmap_chunk(): invalid pointer",
+    # GCC/glibc stack-guard and stdlib abort banners.
     "*** stack smashing detected",
-    "Segmentation fault",
+    # Note: plain "Segmentation fault" is intentionally not listed because
+    # it can appear in normal sim diagnostic output. Use SIGSEGV exit code
+    # instead if we need to detect that path.
 )
 
 # Signal-as-returncode in subprocess.Popen: -N means killed by signal N.

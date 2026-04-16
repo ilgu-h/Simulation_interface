@@ -58,6 +58,11 @@ function parseWorkloadContext(params: URLSearchParams): WorkloadContext | null {
 
 type DerivedDim = { label: string; count: number };
 
+// Shared sentinel so the dim-label renderer and the derivation code stay in
+// sync: when every parallelism axis is 1 we fall back to a single flat Ring,
+// and that dim's label tag is hidden in the UI.
+const FLAT_DIM_LABEL = "flat";
+
 /** Derive per-dim network topology from parallelism context.
  *
  * Each parallelism axis with value > 1 becomes one network dimension. When
@@ -74,7 +79,7 @@ function deriveDimsFromParallelism(ctx: WorkloadContext): DerivedDim[] {
   ];
   const active = candidates.filter((d) => d.count > 1);
   if (active.length === 0) {
-    return [{ label: "flat", count: ctx.npus }];
+    return [{ label: FLAT_DIM_LABEL, count: ctx.npus }];
   }
   return active;
 }
@@ -403,7 +408,9 @@ function NetworkSection({
 
   const dimLabel = (i: number) => {
     const tag = dimLabels[i];
-    return tag && tag !== "flat" ? `dim${i} (${tag}) topology` : `dim${i} topology`;
+    return tag && tag !== FLAT_DIM_LABEL
+      ? `dim${i} (${tag}) topology`
+      : `dim${i} topology`;
   };
 
   return (

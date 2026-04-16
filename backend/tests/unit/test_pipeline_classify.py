@@ -104,3 +104,17 @@ class TestClassifyRun:
             crash_pattern_seen=True,
         )
         assert out.status == "failed"
+
+    def test_none_returncode_maps_to_failure(self):
+        # If stream_run never yielded a parseable 'done' event, the caller
+        # may pass returncode=None. We must not silently succeed — map to
+        # failure so the operator sees that something is off.
+        out = classify_run(
+            returncode=None,
+            stats_complete_ranks=64,
+            total_npus=64,
+            crash_pattern_seen=True,
+        )
+        assert out.status == "failed"
+        assert out.ok is False
+        assert out.warning is None
