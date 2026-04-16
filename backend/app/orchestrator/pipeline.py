@@ -14,11 +14,13 @@ to the same run independently and a refresh resumes from the start.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from sqlmodel import Session
 
@@ -29,6 +31,73 @@ from app.storage.fs_layout import configs_dir, logs_dir, run_dir
 from app.storage.registry import Artifact, Run, get_engine
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# ----- run classification ---------------------------------------------------
+
+# Emitted by ASTRA-sim's statistics logger once per NPU after stats are
+# flushed; presence for every rank means results are on disk.
+_STATS_COMPLETE_RE = re.compile(
+    r"sys\[(\d+)\]\..*statistics processing end", re.IGNORECASE
+)
+
+# glibc heap-integrity aborts and related teardown crashes. These surface
+# on stderr (merged into stdout by stream_run) when the binary's destructor
+# chain hits corrupted memory. They are upstream bugs, not user-caused.
+_TEARDOWN_CRASH_PATTERNS = (
+    "malloc_consolidate",
+    "double free",
+    "free(): invalid pointer",
+    "free(): corrupted unsorted chunks",
+    "corrupted size vs. prev_size",
+    "munmap_chunk(): invalid pointer",
+    "*** stack smashing detected",
+    "Segmentation fault",
+)
+
+# Signal-as-returncode in subprocess.Popen: -N means killed by signal N.
+_SIGABRT_RC = -6
+_SIGTERM_RC = -15
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    status: Literal["succeeded", "failed", "cancelled"]
+    ok: bool
+    warning: str | None = None
+
+
+def classify_run(
+    *,
+    returncode: int | None,
+    stats_complete_ranks: int,
+    total_npus: int,
+    crash_pattern_seen: bool,
+) -> RunOutcome:
+    """Decide the final run status from returncode + observed log signals.
+
+    A SIGABRT after every NPU's stats were flushed is the known ASTRA-sim
+    teardown bug: results are valid, so we call it 'succeeded' but attach
+    a warning. A real user cancel (SIGTERM) stays 'cancelled'.
+    """
+    if returncode == 0:
+        return RunOutcome(status="succeeded", ok=True)
+
+    if returncode == _SIGTERM_RC:
+        return RunOutcome(status="cancelled", ok=False)
+
+    stats_complete = total_npus > 0 and stats_complete_ranks >= total_npus
+    if returncode == _SIGABRT_RC and stats_complete and crash_pattern_seen:
+        return RunOutcome(
+            status="succeeded",
+            ok=True,
+            warning=(
+                "ASTRA-sim aborted during teardown (heap corruption in the "
+                "binary) after all NPU statistics were written. Results are "
+                "valid; this is a known upstream bug."
+            ),
+        )
+
+    return RunOutcome(status="failed", ok=False)
 
 
 # ----- event log helpers ----------------------------------------------------
@@ -160,10 +229,19 @@ def execute_pipeline(run_id: str, bundle: ConfigBundle, workload_prefix: Path) -
     append_event(run_id, "log", text=f"[run] {' '.join(invocation.cli())}")
 
     last_returncode: int | None = None
+    stats_complete_ranks: set[int] = set()
+    crash_pattern_seen = False
     try:
         for kind, payload in stream_run(invocation, run_id=run_id, log_file=stdout_log(run_id)):
             if kind == "line":
                 append_event(run_id, "log", text=payload)
+                m = _STATS_COMPLETE_RE.search(payload)
+                if m:
+                    stats_complete_ranks.add(int(m.group(1)))
+                if not crash_pattern_seen and any(
+                    p in payload for p in _TEARDOWN_CRASH_PATTERNS
+                ):
+                    crash_pattern_seen = True
             elif kind == "done":
                 last_returncode = int(payload.split("=", 1)[1])
     except Exception as e:  # noqa: BLE001 — surface every failure mode to the user
@@ -172,16 +250,16 @@ def execute_pipeline(run_id: str, bundle: ConfigBundle, workload_prefix: Path) -
         append_event(run_id, "done", ok=False, returncode=last_returncode)
         return
 
-    if last_returncode == 0:
-        _set_status(run_id, "succeeded")
-        ok = True
-    else:
-        # Negative returncode == killed by signal (e.g. SIGTERM from cancel).
-        if last_returncode is not None and last_returncode < 0:
-            _set_status(run_id, "cancelled")
-        else:
-            _set_status(run_id, "failed")
-        ok = False
+    outcome = classify_run(
+        returncode=last_returncode,
+        stats_complete_ranks=len(stats_complete_ranks),
+        total_npus=bundle.network.total_npus,
+        crash_pattern_seen=crash_pattern_seen,
+    )
+    if outcome.warning:
+        append_event(run_id, "log", text=f"[warning] {outcome.warning}")
+    _set_status(run_id, outcome.status)
+    ok = outcome.ok
 
     # Index produced log artifacts in SQLite for results browsing later.
     with Session(get_engine()) as session:
