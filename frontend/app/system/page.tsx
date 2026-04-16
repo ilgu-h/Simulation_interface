@@ -63,6 +63,12 @@ type DerivedDim = { label: string; count: number };
 // and that dim's label tag is hidden in the UI.
 const FLAT_DIM_LABEL = "flat";
 
+// Stable per-dim identity for React list-reconciliation. Without this,
+// removing a middle dim via `removeDim` causes React to reuse DOM nodes
+// by index and input drafts / focus / animations hop to the wrong row.
+// Only lives in the UI; never sent to the backend.
+const newDimId = (): string => crypto.randomUUID();
+
 /** Derive per-dim network topology from parallelism context.
  *
  * Each parallelism axis with value > 1 becomes one network dimension. When
@@ -101,6 +107,12 @@ function SystemContent() {
   // Not in ConfigBundle because these are UI-only hints; the network config
   // itself is positional.
   const [dimLabels, setDimLabels] = useState<string[]>([]);
+  // Parallel to `dimLabels`; used only as React keys so list reconciliation
+  // stays stable across add/remove. Seeded to match the default network so
+  // the initial single row has an id before the mount effect runs.
+  const [dimIds, setDimIds] = useState<string[]>(() =>
+    defaultNetworkConfig().topology.map(() => newDimId()),
+  );
   const [issues, setIssues] = useState<Issue[]>([]);
   const [validating, setValidating] = useState(false);
   const [materialized, setMaterialized] = useState<MaterializeResponse | null>(null);
@@ -115,6 +127,7 @@ function SystemContent() {
     if (!workloadCtx) return;
     const dims = deriveDimsFromParallelism(workloadCtx);
     setDimLabels(dims.map((d) => d.label));
+    setDimIds(dims.map(() => newDimId()));
     setBundle((prev) => ({
       ...prev,
       network: {
@@ -201,9 +214,11 @@ function SystemContent() {
           <NetworkSection
             network={bundle.network}
             dimLabels={dimLabels}
-            onChange={(next, nextLabels) => {
+            dimIds={dimIds}
+            onChange={(next, nextLabels, nextIds) => {
               setNetwork(next);
               if (nextLabels) setDimLabels(nextLabels);
+              if (nextIds) setDimIds(nextIds);
             }}
           />
 
@@ -364,11 +379,13 @@ function BackendPicker({
 function NetworkSection({
   network,
   dimLabels,
+  dimIds,
   onChange,
 }: {
   network: NetworkConfig;
   dimLabels: string[];
-  onChange: (n: NetworkConfig, labels?: string[]) => void;
+  dimIds: string[];
+  onChange: (n: NetworkConfig, labels?: string[], ids?: string[]) => void;
 }) {
   const setDim = (i: number, patch: Partial<{ topology: TopologyKind; npus_count: number; bandwidth: number; latency: number }>) => {
     const next: NetworkConfig = {
@@ -393,6 +410,7 @@ function NetworkSection({
         latency: [...network.latency, 500.0],
       },
       [...dimLabels, "custom"],
+      [...dimIds, newDimId()],
     );
 
   const removeDim = (i: number) =>
@@ -404,6 +422,7 @@ function NetworkSection({
         latency: network.latency.filter((_, idx) => idx !== i),
       },
       dimLabels.filter((_, idx) => idx !== i),
+      dimIds.filter((_, idx) => idx !== i),
     );
 
   const dimLabel = (i: number) => {
@@ -418,7 +437,10 @@ function NetworkSection({
       <SectionTitle>Network (analytical)</SectionTitle>
       <div className="space-y-2">
         {network.topology.map((t, i) => (
-          <div key={i} className="grid grid-cols-[1.4fr_1fr_1fr_1fr_auto] items-end gap-2">
+          <div
+            key={dimIds[i] ?? `fallback-${i}`}
+            className="grid grid-cols-[1.4fr_1fr_1fr_1fr_auto] items-end gap-2"
+          >
             <Field label={dimLabel(i)}>
               <select
                 value={t}
