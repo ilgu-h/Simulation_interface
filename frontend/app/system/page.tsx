@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { TopologyView } from "@/components/topology/TopologyView";
 import {
@@ -14,12 +16,51 @@ import {
   type ConfigBundle,
   type Issue,
   type MaterializeResponse,
+  type MemoryConfig,
+  type MemoryType,
   type NetworkConfig,
   type SystemConfig,
   type TopologyKind,
 } from "@/lib/api";
 
 export default function SystemPage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-zinc-500">Loading...</p>}>
+      <SystemContent />
+    </Suspense>
+  );
+}
+
+/** Parse workload context from URL search params (if arriving from Workload page). */
+type WorkloadContext = {
+  npus: number;
+  dp: number;
+  tp: number;
+  sp: number;
+  pp: number;
+  ep: number;
+  workload: string | null;
+};
+
+function parseWorkloadContext(params: URLSearchParams): WorkloadContext | null {
+  const npus = params.get("npus");
+  if (!npus) return null;
+  return {
+    npus: Number(npus),
+    dp: Number(params.get("dp") ?? 1),
+    tp: Number(params.get("tp") ?? 1),
+    sp: Number(params.get("sp") ?? 1),
+    pp: Number(params.get("pp") ?? 1),
+    ep: Number(params.get("ep") ?? 1),
+    workload: params.get("workload"),
+  };
+}
+
+function SystemContent() {
+  const searchParams = useSearchParams();
+  const workloadCtx = useMemo(() => parseWorkloadContext(searchParams), [searchParams]);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+
   const [backends, setBackends] = useState<BackendInfo[]>([]);
   const [bundle, setBundle] = useState<ConfigBundle>({
     backend: "analytical_cu",
@@ -35,6 +76,20 @@ export default function SystemPage() {
 
   useEffect(() => {
     listBackends().then(setBackends).catch((e) => setError((e as Error).message));
+  }, []);
+
+  // Auto-fill NPU count + expected_npus from workload context (on mount only).
+  useEffect(() => {
+    if (!workloadCtx) return;
+    setBundle((prev) => ({
+      ...prev,
+      network: {
+        ...prev.network,
+        npus_count: [workloadCtx.npus, ...prev.network.npus_count.slice(1)],
+      },
+      expected_npus: workloadCtx.npus,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-validate on every change (debounced lightly via setTimeout).
@@ -70,6 +125,7 @@ export default function SystemPage() {
 
   const setNetwork = (next: NetworkConfig) => setBundle({ ...bundle, network: next });
   const setSystem = (next: SystemConfig) => setBundle({ ...bundle, system: next });
+  const setMemory = (next: MemoryConfig) => setBundle({ ...bundle, memory: next });
 
   const onMaterialize = async () => {
     setError(null);
@@ -96,6 +152,10 @@ export default function SystemPage() {
 
       <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
         <section className="space-y-6">
+          {workloadCtx && !bannerDismissed && (
+            <WorkloadContextBanner ctx={workloadCtx} onDismiss={() => setBannerDismissed(true)} />
+          )}
+
           <BackendPicker
             backends={backends}
             value={bundle.backend}
@@ -106,7 +166,7 @@ export default function SystemPage() {
 
           <SystemSection system={bundle.system} onChange={setSystem} />
 
-          <MemoryNote />
+          <MemorySection memory={bundle.memory} onChange={setMemory} />
 
           <div className="rounded border border-zinc-800 bg-zinc-900/50 p-3 text-sm">
             <div className="flex items-baseline justify-between">
@@ -167,10 +227,64 @@ export default function SystemPage() {
                 <li>{materialized.files.system}</li>
                 <li>{materialized.files.memory}</li>
               </ul>
+              <div className="mt-3 border-t border-emerald-900/50 pt-3">
+                <Link
+                  href={
+                    workloadCtx?.workload
+                      ? `/validate?workload=${encodeURIComponent(workloadCtx.workload)}`
+                      : "/validate"
+                  }
+                  className="block rounded bg-zinc-100 px-4 py-2 text-center text-sm font-medium text-zinc-900 transition hover:bg-white"
+                >
+                  Continue to Validate →
+                </Link>
+              </div>
             </div>
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function WorkloadContextBanner({
+  ctx,
+  onDismiss,
+}: {
+  ctx: WorkloadContext;
+  onDismiss: () => void;
+}) {
+  const dims = [
+    `DP=${ctx.dp}`,
+    `TP=${ctx.tp}`,
+    `SP=${ctx.sp}`,
+    `PP=${ctx.pp}`,
+    ...(ctx.ep > 1 ? [`EP=${ctx.ep}`] : []),
+  ].join(" \u00d7 ");
+
+  return (
+    <div className="flex items-start justify-between rounded border border-blue-900/50 bg-blue-950/40 p-3">
+      <div>
+        <div className="text-[10px] uppercase tracking-wide text-blue-400">
+          Workload context
+        </div>
+        <div className="mt-1 text-sm text-zinc-100">
+          <strong>{ctx.npus} NPUs</strong>
+          <span className="text-zinc-400"> — {dims}</span>
+        </div>
+        {ctx.workload && (
+          <div className="mt-0.5 truncate font-mono text-xs text-zinc-500">
+            {ctx.workload}
+          </div>
+        )}
+      </div>
+      <button
+        onClick={onDismiss}
+        className="ml-3 text-zinc-500 transition hover:text-zinc-300"
+        aria-label="Dismiss"
+      >
+        ✕
+      </button>
     </div>
   );
 }
@@ -390,14 +504,113 @@ function SystemSection({
   );
 }
 
-function MemoryNote() {
+const MEMORY_TYPES: { value: MemoryType; label: string; hint: string }[] = [
+  {
+    value: "NO_MEMORY_EXPANSION",
+    label: "No memory expansion",
+    hint: "No remote memory access",
+  },
+  {
+    value: "PER_NODE_MEMORY_EXPANSION",
+    label: "Per-node expansion",
+    hint: "Each node has dedicated remote memory; transactions serialized per node",
+  },
+  {
+    value: "PER_NPU_MEMORY_EXPANSION",
+    label: "Per-NPU expansion",
+    hint: "Each NPU has independent remote memory access",
+  },
+  {
+    value: "MEMORY_POOL",
+    label: "Memory pool",
+    hint: "Single shared pool; transactions serialized globally",
+  },
+];
+
+function MemorySection({
+  memory,
+  onChange,
+}: {
+  memory: MemoryConfig;
+  onChange: (m: MemoryConfig) => void;
+}) {
+  const isExpansion = memory["memory-type"] !== "NO_MEMORY_EXPANSION";
+  const isPerNode = memory["memory-type"] === "PER_NODE_MEMORY_EXPANSION";
+
+  const setType = (t: MemoryType) => {
+    const next: MemoryConfig = {
+      ...memory,
+      "memory-type": t,
+    };
+    if (t === "NO_MEMORY_EXPANSION") {
+      next["remote-mem-latency"] = 0;
+      next["remote-mem-bw"] = 0;
+      next["num-nodes"] = null;
+      next["num-npus-per-node"] = null;
+    }
+    if (t !== "PER_NODE_MEMORY_EXPANSION") {
+      next["num-nodes"] = null;
+      next["num-npus-per-node"] = null;
+    }
+    onChange(next);
+  };
+
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <SectionTitle>Memory</SectionTitle>
+      <Field label="memory type">
+        <select
+          value={memory["memory-type"]}
+          onChange={(e) => setType(e.target.value as MemoryType)}
+          className="w-full rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-sm"
+        >
+          {MEMORY_TYPES.map((mt) => (
+            <option key={mt.value} value={mt.value}>
+              {mt.label}
+            </option>
+          ))}
+        </select>
+      </Field>
       <p className="text-xs text-zinc-500">
-        Phase 0–2 ships <code className="font-mono">NO_MEMORY_EXPANSION</code> only. Other
-        memory types arrive in Phase 4 along with custom collectives.
+        {MEMORY_TYPES.find((mt) => mt.value === memory["memory-type"])?.hint}
       </p>
+
+      {isExpansion && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Field label="latency (ns)">
+            <NumInput
+              value={memory["remote-mem-latency"]}
+              min={0}
+              onChange={(v) => onChange({ ...memory, "remote-mem-latency": v })}
+            />
+          </Field>
+          <Field label="bandwidth (GB/s)">
+            <NumInput
+              value={memory["remote-mem-bw"]}
+              min={0}
+              onChange={(v) => onChange({ ...memory, "remote-mem-bw": v })}
+            />
+          </Field>
+          {isPerNode && (
+            <>
+              <Field label="num-nodes">
+                <NumInput
+                  value={memory["num-nodes"] ?? 0}
+                  min={1}
+                  onChange={(v) => onChange({ ...memory, "num-nodes": v })}
+                />
+              </Field>
+              <Field label="npus-per-node">
+                <NumInput
+                  value={memory["num-npus-per-node"] ?? 0}
+                  min={1}
+                  onChange={(v) => onChange({ ...memory, "num-npus-per-node": v })}
+                />
+              </Field>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

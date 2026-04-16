@@ -33,6 +33,9 @@ frameworks/astra-sim/extern/network_backend/*/build/
 *.sqlite
 *.sqlite3
 
+# Superpowers brainstorm artifacts
+.superpowers/
+
 # Editor / OS
 .DS_Store
 .idea/

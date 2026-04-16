@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -15,8 +17,60 @@ import {
 
 type Tab = "select" | "generate";
 
+/** Group library entries by workload prefix (strip `.N.et` suffix). */
+type WorkloadGroup = {
+  prefix: string;
+  displayName: string;
+  source: "examples" | "run";
+  runId: string | null;
+  traceCount: number;
+  totalBytes: number;
+};
+
+function groupByPrefix(entries: LibraryEntry[]): WorkloadGroup[] {
+  const map = new Map<string, WorkloadGroup>();
+
+  for (const e of entries) {
+    const m = e.name.match(/^(.+)\.\d+\.et$/);
+    const localPrefix = m ? m[1] : e.name;
+    const fullPrefix =
+      e.source === "examples"
+        ? `frameworks/astra-sim/examples/workload/${localPrefix}`
+        : `runs/${e.run_id}/traces/${localPrefix}`;
+
+    const existing = map.get(fullPrefix);
+    if (existing) {
+      existing.traceCount += 1;
+      existing.totalBytes += e.size_bytes;
+    } else {
+      map.set(fullPrefix, {
+        prefix: fullPrefix,
+        displayName:
+          e.source === "examples"
+            ? localPrefix
+            : `${localPrefix} (run ${e.run_id?.slice(0, 8) ?? "?"})`,
+        source: e.source,
+        runId: e.run_id,
+        traceCount: 1,
+        totalBytes: e.size_bytes,
+      });
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) =>
+    a.displayName.localeCompare(b.displayName),
+  );
+}
+
 export default function WorkloadPage() {
   const [tab, setTab] = useState<Tab>("select");
+  const [selected, setSelected] = useState<string | null>(null);
+  const router = useRouter();
+
+  const goToValidate = () => {
+    if (!selected) return;
+    router.push(`/validate?workload=${encodeURIComponent(selected)}`);
+  };
 
   return (
     <div className="space-y-6">
@@ -43,12 +97,28 @@ export default function WorkloadPage() {
         ))}
       </div>
 
-      {tab === "select" ? <LibraryView /> : <GenerateView />}
+      {tab === "select" ? (
+        <LibraryView
+          selected={selected}
+          onSelect={setSelected}
+          onContinue={goToValidate}
+        />
+      ) : (
+        <GenerateView />
+      )}
     </div>
   );
 }
 
-function LibraryView() {
+function LibraryView({
+  selected,
+  onSelect,
+  onContinue,
+}: {
+  selected: string | null;
+  onSelect: (prefix: string) => void;
+  onContinue: () => void;
+}) {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +127,8 @@ function LibraryView() {
       .then(setEntries)
       .catch((e) => setError((e as Error).message));
   }, []);
+
+  const groups = useMemo(() => (entries ? groupByPrefix(entries) : []), [entries]);
 
   if (error) return <ErrorBox message={error} />;
   if (!entries) return <p className="text-sm text-zinc-500">Loading...</p>;
@@ -69,28 +141,63 @@ function LibraryView() {
   }
 
   return (
-    <table className="w-full text-sm">
-      <thead className="text-left text-xs uppercase tracking-wide text-zinc-500">
-        <tr>
-          <th className="py-2 pr-4">Source</th>
-          <th className="py-2 pr-4">Name</th>
-          <th className="py-2 pr-4">Run</th>
-          <th className="py-2 pr-4 text-right">Size</th>
-        </tr>
-      </thead>
-      <tbody>
-        {entries.map((e) => (
-          <tr key={e.path} className="border-t border-zinc-900">
-            <td className="py-2 pr-4 font-mono text-xs text-zinc-400">{e.source}</td>
-            <td className="py-2 pr-4 font-mono">{e.name}</td>
-            <td className="py-2 pr-4 font-mono text-xs text-zinc-500">{e.run_id ?? ""}</td>
-            <td className="py-2 pr-4 text-right tabular-nums text-zinc-400">
-              {formatBytes(e.size_bytes)}
-            </td>
+    <div className="space-y-4">
+      <table className="w-full text-sm">
+        <thead className="text-left text-xs uppercase tracking-wide text-zinc-500">
+          <tr>
+            <th className="w-10 py-2" />
+            <th className="py-2 pr-4">Source</th>
+            <th className="py-2 pr-4">Workload</th>
+            <th className="py-2 pr-4 text-right">Traces</th>
+            <th className="py-2 pr-4 text-right">Total size</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {groups.map((g) => {
+            const isSelected = selected === g.prefix;
+            return (
+              <tr
+                key={g.prefix}
+                onClick={() => onSelect(g.prefix)}
+                className={`cursor-pointer border-t transition ${
+                  isSelected
+                    ? "border-zinc-700 bg-zinc-800/60"
+                    : "border-zinc-900 hover:bg-zinc-900/50"
+                }`}
+              >
+                <td className="py-2 pl-2">
+                  <input
+                    type="radio"
+                    name="workload-select"
+                    checked={isSelected}
+                    onChange={() => onSelect(g.prefix)}
+                    className="accent-zinc-100"
+                  />
+                </td>
+                <td className="py-2 pr-4 font-mono text-xs text-zinc-400">
+                  {g.source}
+                </td>
+                <td className="py-2 pr-4 font-mono text-sm">{g.displayName}</td>
+                <td className="py-2 pr-4 text-right tabular-nums text-zinc-400">
+                  {g.traceCount}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums text-zinc-400">
+                  {formatBytes(g.totalBytes)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <button
+        onClick={onContinue}
+        disabled={!selected}
+        className="rounded bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 transition hover:bg-white disabled:opacity-40"
+      >
+        Continue to Validate →
+      </button>
+    </div>
   );
 }
 
@@ -233,6 +340,7 @@ function GenerateView() {
                 <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap">{result.stdout_tail}</pre>
               </details>
             )}
+            <GenerateNextStep spec={spec} result={result} totalNpus={totalNpus} />
           </div>
         )}
         {!result && !error && (
@@ -241,6 +349,57 @@ function GenerateView() {
           </p>
         )}
       </section>
+    </div>
+  );
+}
+
+function GenerateNextStep({
+  spec,
+  result,
+  totalNpus,
+}: {
+  spec: StgSpec;
+  result: GenerateResponse;
+  totalNpus: number;
+}) {
+  // Derive workload prefix from first trace file: strip ".N.et" suffix.
+  const workloadPrefix = useMemo(() => {
+    const first = result.trace_files[0];
+    if (!first) return null;
+    const m = first.match(/^(.+)\.\d+\.et$/);
+    return m ? m[1] : first;
+  }, [result.trace_files]);
+
+  const dims = [
+    `DP=${spec.dp}`,
+    `TP=${spec.tp}`,
+    `SP=${spec.sp}`,
+    `PP=${spec.pp}`,
+    ...(spec.model_type === "moe" ? [`EP=${spec.ep}`] : []),
+  ].join(" \u00d7 ");
+
+  const params = new URLSearchParams({
+    npus: String(totalNpus),
+    dp: String(spec.dp),
+    tp: String(spec.tp),
+    sp: String(spec.sp),
+    pp: String(spec.pp),
+    ep: String(spec.ep),
+    ...(workloadPrefix ? { workload: workloadPrefix } : {}),
+  });
+
+  return (
+    <div className="border-t border-zinc-700 pt-3">
+      <div className="mb-2 text-xs text-zinc-400">
+        Next: configure system for <strong className="text-zinc-200">{totalNpus} NPUs</strong>{" "}
+        ({dims})
+      </div>
+      <Link
+        href={`/system?${params.toString()}`}
+        className="block rounded bg-zinc-100 px-4 py-2 text-center text-sm font-medium text-zinc-900 transition hover:bg-white"
+      >
+        Configure System →
+      </Link>
     </div>
   );
 }

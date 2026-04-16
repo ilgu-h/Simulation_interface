@@ -90,6 +90,35 @@ def _validate_bundle(bundle: ConfigBundle) -> tuple[list[Issue], BackendAdapter 
                 )
             )
 
+    # Memory config validation.
+    mem = bundle.memory
+    if mem.memory_type != "NO_MEMORY_EXPANSION":
+        if mem.remote_mem_bw <= 0:
+            issues.append(
+                Issue(
+                    severity="error",
+                    field="memory.remote-mem-bw",
+                    message="remote-mem-bw must be > 0 for memory expansion.",
+                )
+            )
+    if mem.memory_type == "PER_NODE_MEMORY_EXPANSION":
+        if not mem.num_nodes or mem.num_nodes < 1:
+            issues.append(
+                Issue(
+                    severity="error",
+                    field="memory.num-nodes",
+                    message="num-nodes must be >= 1 for PER_NODE_MEMORY_EXPANSION.",
+                )
+            )
+        if not mem.num_npus_per_node or mem.num_npus_per_node < 1:
+            issues.append(
+                Issue(
+                    severity="error",
+                    field="memory.num-npus-per-node",
+                    message="num-npus-per-node must be >= 1 for PER_NODE_MEMORY_EXPANSION.",
+                )
+            )
+
     return issues, adapter
 
 
