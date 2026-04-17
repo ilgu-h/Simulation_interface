@@ -18,14 +18,14 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.api.system import ConfigBundle
 from app.build.backend_adapter import get_backend, is_built
 from app.orchestrator import astra_runner, pipeline
-from app.storage.fs_layout import new_run_id, run_dir, traces_dir
+from app.storage.fs_layout import configs_dir, new_run_id, run_dir, traces_dir
 from app.storage.registry import Run, get_engine
 
 router = APIRouter()
@@ -435,6 +435,28 @@ def get_run(run_id: str) -> RunStatus:
         config_dir=str(run_dir(run_id) / "configs"),
         log_dir=str(run_dir(run_id) / "logs"),
     )
+
+
+@router.get("/{run_id}/artifacts/config.txt")
+def get_config_txt(run_id: str) -> FileResponse:
+    """Serve the per-run ns-3 config.txt for inspection / download.
+
+    Only ns-3 runs materialize this file. Analytical runs use network.yml
+    (served via /results/{id}/spec instead). Returns 404 when either the
+    run doesn't exist or it wasn't an ns-3 run — hiding the filesystem
+    detour the CLAUDE.md debug runbook previously required.
+    """
+    _assert_safe_id(run_id)
+    if not run_dir(run_id).exists():
+        raise HTTPException(404, f"Run {run_id} not found.")
+    path = configs_dir(run_id) / "config.txt"
+    if not path.is_file():
+        raise HTTPException(
+            404,
+            f"config.txt not found for run {run_id} "
+            "(only ns-3 runs produce this file).",
+        )
+    return FileResponse(path, media_type="text/plain", filename=f"config-{run_id}.txt")
 
 
 @router.post("/{run_id}/cancel")

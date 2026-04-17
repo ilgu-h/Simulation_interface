@@ -54,6 +54,19 @@ class TestLogicalTopologyFlag:
             a.startswith("--logical-topology-configuration=") for a in inv.cli()
         )
 
+    def test_analytical_emits_logging_folder_flag(self):
+        """Positive case: analytical invocations carry --logging-folder.
+
+        Pairs with `test_ns3_appends_logical_topology_flag` (which asserts
+        the ns-3 path suppresses this flag). Together they lock the
+        contract in both directions.
+        """
+        inv = _sample_invocation(COMM_GROUP_EMPTY)
+        assert inv.emit_logging_folder is True
+        assert any(
+            a.startswith("--logging-folder=/tmp/run/logs") for a in inv.cli()
+        )
+
     def test_ns3_appends_logical_topology_flag(self):
         inv = AstraInvocation(
             binary=Path("/opt/astra/AstraSim_NS3"),

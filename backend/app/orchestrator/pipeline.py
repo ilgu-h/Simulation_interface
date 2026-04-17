@@ -17,6 +17,7 @@ import json
 import re
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,6 +46,16 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 _STATS_COMPLETE_RE = re.compile(
     r"sys\[(\d+)\]\..*statistics processing end", re.IGNORECASE
 )
+
+# Per-NPU workload-finished marker: useful for progress reporting during
+# long ns-3 runs where the simulator goes silent between start and finish.
+_FINISHED_RE = re.compile(r"sys\[(\d+)\] finished,")
+
+# How long (seconds) to wait between heartbeat progress events when the
+# simulator produces no output. ns-3 runs can be minutes of silence
+# between start and the first stats flush — without this, the SSE stream
+# looks indistinguishable from a hung binary.
+_HEARTBEAT_INTERVAL_S = 30.0
 
 # glibc heap-integrity aborts and related teardown crashes. These surface
 # on stderr (merged into stdout by stream_run) when the binary's destructor
@@ -201,11 +212,11 @@ def _materialize(bundle: ConfigBundle, run_id: str) -> Path:
         (cdir / "logical_topology.json").write_text(
             bundle.network.to_logical_topology_json()
         )
-        _materialize_ns3_config(bundle.network, cdir)
+        _materialize_ns3_config(bundle.network, cdir, run_id)
     return cdir
 
 
-def _materialize_ns3_config(network: NS3NetworkConfig, cdir: Path) -> None:
+def _materialize_ns3_config(network: NS3NetworkConfig, cdir: Path, run_id: str) -> None:
     """Write runs/<id>/configs/config.txt = base config.txt + typed overrides.
 
     Base comes from the ns-3 submodule at the user-supplied mix_config_path.
@@ -219,6 +230,12 @@ def _materialize_ns3_config(network: NS3NetworkConfig, cdir: Path) -> None:
     relative to the run cwd (``ns-3/build/scratch``). We rewrite the
     TOPOLOGY_FILE key accordingly so the user sees a clean project-tree
     path in the UI but the simulator gets what it actually needs.
+
+    Output files (FCT_OUTPUT_FILE, PFC_OUTPUT_FILE, QLEN_MON_FILE,
+    TRACE_OUTPUT_FILE) are redirected to absolute paths under
+    ``runs/<id>/logs/`` so per-run packet-level data stays isolated and
+    our ns-3 parsers can find it. Without this redirect every run would
+    clobber the shared ``scratch/output/`` directory.
     """
     import os
     from collections import OrderedDict
@@ -238,6 +255,16 @@ def _materialize_ns3_config(network: NS3NetworkConfig, cdir: Path) -> None:
     )
     topology_abs = astra_sim_root / network.physical_topology_path
     merged["TOPOLOGY_FILE"] = os.path.relpath(topology_abs, ns3_build_scratch)
+
+    # Redirect output files to this run's logs/ so the parsers can find
+    # them and concurrent runs don't race. Absolute paths — ns-3 opens
+    # these via fopen() which handles them fine regardless of cwd.
+    run_logs = logs_dir(run_id)
+    run_logs.mkdir(parents=True, exist_ok=True)
+    merged["FCT_OUTPUT_FILE"] = str(run_logs / "fct.txt")
+    merged["PFC_OUTPUT_FILE"] = str(run_logs / "pfc.txt")
+    merged["QLEN_MON_FILE"] = str(run_logs / "qlen.txt")
+    merged["TRACE_OUTPUT_FILE"] = str(run_logs / "mix.tr")
 
     (cdir / "config.txt").write_text(write_config_txt(merged))
 
@@ -317,13 +344,60 @@ def execute_pipeline(run_id: str, bundle: ConfigBundle, workload_prefix: Path) -
     last_returncode: int | None = None
     stats_complete_ranks: set[int] = set()
     crash_pattern_seen = False
+    total_npus = bundle.network.total_npus
+    # Shared progress state mutated from the stream loop and read from the
+    # heartbeat thread. CPython's GIL makes simple int reads/writes atomic
+    # but multi-step set ops are not — so we guard with an explicit lock.
+    progress_lock = threading.Lock()
+    progress_state = {
+        "finished_count": 0,
+        "last_line_ts": time.monotonic(),
+    }
+    # Heartbeat thread: emits periodic progress events during simulator
+    # silence so the SSE stream doesn't look hung on long ns-3 runs. It's
+    # a best-effort signal; the main loop's line-level events are still
+    # authoritative. Daemon so the main thread's exit path takes it down.
+    stop_heartbeat = threading.Event()
+
+    def _heartbeat() -> None:
+        while not stop_heartbeat.wait(_HEARTBEAT_INTERVAL_S):
+            with progress_lock:
+                silence = time.monotonic() - progress_state["last_line_ts"]
+                finished_count = progress_state["finished_count"]
+            if silence >= _HEARTBEAT_INTERVAL_S:
+                append_event(
+                    run_id,
+                    "progress",
+                    text=f"simulator running ({int(silence)}s since last output)",
+                    finished=finished_count,
+                    total=total_npus,
+                )
+
+    hb = threading.Thread(target=_heartbeat, daemon=True, name=f"hb-{run_id}")
+    hb.start()
+
+    finished_ranks: set[int] = set()
     try:
         for kind, payload in stream_run(invocation, run_id=run_id, log_file=stdout_log(run_id)):
             if kind == "line":
+                with progress_lock:
+                    progress_state["last_line_ts"] = time.monotonic()
                 append_event(run_id, "log", text=payload)
                 m = _STATS_COMPLETE_RE.search(payload)
                 if m:
                     stats_complete_ranks.add(int(m.group(1)))
+                fm = _FINISHED_RE.search(payload)
+                if fm:
+                    finished_ranks.add(int(fm.group(1)))
+                    with progress_lock:
+                        progress_state["finished_count"] = len(finished_ranks)
+                    append_event(
+                        run_id,
+                        "progress",
+                        text=f"npu {fm.group(1)} finished",
+                        finished=len(finished_ranks),
+                        total=total_npus,
+                    )
                 if not crash_pattern_seen and any(
                     p in payload for p in _TEARDOWN_CRASH_PATTERNS
                 ):
@@ -331,15 +405,18 @@ def execute_pipeline(run_id: str, bundle: ConfigBundle, workload_prefix: Path) -
             elif kind == "done":
                 last_returncode = int(payload.split("=", 1)[1])
     except Exception as e:  # noqa: BLE001 — surface every failure mode to the user
+        stop_heartbeat.set()
         _set_status(run_id, "failed")
         append_event(run_id, "log", text=f"[error] {e}")
         append_event(run_id, "done", ok=False, returncode=last_returncode)
         return
+    finally:
+        stop_heartbeat.set()
 
     outcome = classify_run(
         returncode=last_returncode,
         stats_complete_ranks=len(stats_complete_ranks),
-        total_npus=bundle.network.total_npus,
+        total_npus=total_npus,
         crash_pattern_seen=crash_pattern_seen,
     )
     if outcome.warning:
