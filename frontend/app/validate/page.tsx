@@ -8,9 +8,11 @@ import {
   defaultMemoryConfig,
   defaultNetworkConfig,
   defaultSystemConfig,
+  isAnalyticalNetworkConfig,
   listWorkloadLibrary,
   startRun,
   validateRun,
+  type AnalyticalNetworkConfig,
   type ConfigBundle,
   type LibraryEntry,
   type RunValidateResponse,
@@ -53,6 +55,7 @@ function ValidateContent() {
     setBundle((b) => ({
       ...b,
       network: {
+        kind: "analytical",
         topology: ["Ring"],
         npus_count: [4],
         bandwidth: [50.0],
@@ -137,6 +140,22 @@ function ValidateContent() {
   const errors = (result?.issues ?? []).filter((i) => i.severity === "error");
   const warnings = (result?.issues ?? []).filter((i) => i.severity === "warning");
 
+  // The /validate page is analytical-only for now. If the user lands here
+  // with an ns-3 bundle (shouldn't happen via the default UI flow but can
+  // via deep-link), short-circuit to a notice rather than try to render
+  // analytical-shaped controls.
+  if (!isAnalyticalNetworkConfig(bundle.network)) {
+    return (
+      <div className="rounded border border-amber-900/60 bg-amber-950/30 p-4 text-sm text-amber-100">
+        This page currently supports the analytical backend only. Switch
+        the backend on the System page to continue.
+      </div>
+    );
+  }
+  const analyticalNetwork: AnalyticalNetworkConfig = bundle.network;
+  const setAnalyticalNetwork = (next: AnalyticalNetworkConfig) =>
+    setBundle({ ...bundle, network: next });
+
   return (
     <div className="space-y-6">
       <div>
@@ -176,41 +195,32 @@ function ValidateContent() {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <NumField
               label="dim0 NPUs"
-              value={bundle.network.npus_count[0]}
+              value={analyticalNetwork.npus_count[0]}
               onChange={(v) =>
-                setBundle({
-                  ...bundle,
-                  network: {
-                    ...bundle.network,
-                    npus_count: [v, ...bundle.network.npus_count.slice(1)],
-                  },
+                setAnalyticalNetwork({
+                  ...analyticalNetwork,
+                  npus_count: [v, ...analyticalNetwork.npus_count.slice(1)],
                 })
               }
             />
             <NumField
               label="bandwidth"
-              value={bundle.network.bandwidth[0]}
+              value={analyticalNetwork.bandwidth[0]}
               step="0.1"
               onChange={(v) =>
-                setBundle({
-                  ...bundle,
-                  network: {
-                    ...bundle.network,
-                    bandwidth: [v, ...bundle.network.bandwidth.slice(1)],
-                  },
+                setAnalyticalNetwork({
+                  ...analyticalNetwork,
+                  bandwidth: [v, ...analyticalNetwork.bandwidth.slice(1)],
                 })
               }
             />
             <NumField
               label="latency"
-              value={bundle.network.latency[0]}
+              value={analyticalNetwork.latency[0]}
               onChange={(v) =>
-                setBundle({
-                  ...bundle,
-                  network: {
-                    ...bundle.network,
-                    latency: [v, ...bundle.network.latency.slice(1)],
-                  },
+                setAnalyticalNetwork({
+                  ...analyticalNetwork,
+                  latency: [v, ...analyticalNetwork.latency.slice(1)],
                 })
               }
             />
@@ -232,7 +242,7 @@ function ValidateContent() {
               <span>Topology preview</span>
               <span>{busy ? "validating..." : ""}</span>
             </div>
-            <TopologyView network={bundle.network} errorDimIdx={errorDimIdx} />
+            <TopologyView network={analyticalNetwork} errorDimIdx={errorDimIdx} />
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -243,11 +253,11 @@ function ValidateContent() {
             />
             <SummaryCard
               title="prod(npus_count)"
-              value={bundle.network.npus_count.reduce((a, b) => a * b, 1)}
+              value={analyticalNetwork.npus_count.reduce((a, b) => a * b, 1)}
               hint={
                 result?.workload
                   ? result.workload.trace_count ===
-                    bundle.network.npus_count.reduce((a, b) => a * b, 1)
+                    analyticalNetwork.npus_count.reduce((a, b) => a * b, 1)
                     ? "matches"
                     : "mismatch"
                   : ""

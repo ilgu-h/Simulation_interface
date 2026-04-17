@@ -8,10 +8,15 @@ import { TopologyView } from "@/components/topology/TopologyView";
 import {
   defaultMemoryConfig,
   defaultNetworkConfig,
+  defaultNetworkForSchema,
   defaultSystemConfig,
+  isAnalyticalNetworkConfig,
+  isNs3NetworkConfig,
   listBackends,
   materializeConfigs,
+  networkTotalNpus,
   validateConfigs,
+  type AnalyticalNetworkConfig,
   type BackendInfo,
   type ConfigBundle,
   type Issue,
@@ -19,6 +24,7 @@ import {
   type MemoryConfig,
   type MemoryType,
   type NetworkConfig,
+  type Ns3NetworkConfig,
   type SystemConfig,
   type TopologyKind,
 } from "@/lib/api";
@@ -123,21 +129,26 @@ function SystemContent() {
   }, []);
 
   // Derive multi-dim network topology from parallelism context (mount only).
+  // Only applies to the analytical schema; ns-3 uses logical_dims which the
+  // user edits directly.
   useEffect(() => {
     if (!workloadCtx) return;
     const dims = deriveDimsFromParallelism(workloadCtx);
     setDimLabels(dims.map((d) => d.label));
     setDimIds(dims.map(() => newDimId()));
-    setBundle((prev) => ({
-      ...prev,
-      network: {
+    setBundle((prev) => {
+      if (!isAnalyticalNetworkConfig(prev.network)) {
+        return { ...prev, expected_npus: workloadCtx.npus };
+      }
+      const nextNetwork: AnalyticalNetworkConfig = {
+        kind: "analytical",
         topology: dims.map(() => "Ring"),
         npus_count: dims.map((d) => d.count),
         bandwidth: dims.map(() => 50.0),
         latency: dims.map(() => 500.0),
-      },
-      expected_npus: workloadCtx.npus,
-    }));
+      };
+      return { ...prev, network: nextNetwork, expected_npus: workloadCtx.npus };
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -157,10 +168,7 @@ function SystemContent() {
     return () => clearTimeout(t);
   }, [bundle]);
 
-  const totalNpus = useMemo(
-    () => bundle.network.npus_count.reduce((a, b) => a * b, 1),
-    [bundle.network.npus_count],
-  );
+  const totalNpus = useMemo(() => networkTotalNpus(bundle.network), [bundle.network]);
 
   const errorDimIdx = useMemo(() => {
     for (const issue of issues) {
@@ -175,6 +183,30 @@ function SystemContent() {
   const setNetwork = (next: NetworkConfig) => setBundle({ ...bundle, network: next });
   const setSystem = (next: SystemConfig) => setBundle({ ...bundle, system: next });
   const setMemory = (next: MemoryConfig) => setBundle({ ...bundle, memory: next });
+
+  // Switch backend → reset network to the variant's default when the
+  // network_schema changes. Avoids sending analytical fields to the ns3
+  // endpoint (or vice versa).
+  const changeBackend = (nextName: string) => {
+    const nextBackend = backends.find((b) => b.name === nextName);
+    const nextSchema = nextBackend?.network_schema;
+    const currentSchema = bundle.network.kind;
+    if (
+      (nextSchema === "ns3" && currentSchema !== "ns3") ||
+      (nextSchema !== "ns3" && currentSchema === "ns3")
+    ) {
+      setBundle({
+        ...bundle,
+        backend: nextName,
+        network: defaultNetworkForSchema(nextSchema),
+      });
+      // Reset per-dim UI state since the topology array shape changed.
+      setDimLabels([]);
+      setDimIds([newDimId()]);
+    } else {
+      setBundle({ ...bundle, backend: nextName });
+    }
+  };
 
   const onMaterialize = async () => {
     setError(null);
@@ -208,19 +240,26 @@ function SystemContent() {
           <BackendPicker
             backends={backends}
             value={bundle.backend}
-            onChange={(b) => setBundle({ ...bundle, backend: b })}
+            onChange={changeBackend}
           />
 
-          <NetworkSection
-            network={bundle.network}
-            dimLabels={dimLabels}
-            dimIds={dimIds}
-            onChange={(next, nextLabels, nextIds) => {
-              setNetwork(next);
-              if (nextLabels) setDimLabels(nextLabels);
-              if (nextIds) setDimIds(nextIds);
-            }}
-          />
+          {isAnalyticalNetworkConfig(bundle.network) ? (
+            <NetworkSection
+              network={bundle.network}
+              dimLabels={dimLabels}
+              dimIds={dimIds}
+              onChange={(next, nextLabels, nextIds) => {
+                setNetwork(next);
+                if (nextLabels) setDimLabels(nextLabels);
+                if (nextIds) setDimIds(nextIds);
+              }}
+            />
+          ) : (
+            <Ns3NetworkSection
+              network={bundle.network}
+              onChange={setNetwork}
+            />
+          )}
 
           <SystemSection system={bundle.system} onChange={setSystem} />
 
@@ -228,7 +267,11 @@ function SystemContent() {
 
           <div className="rounded border border-zinc-800 bg-zinc-900/50 p-3 text-sm">
             <div className="flex items-baseline justify-between">
-              <span className="text-zinc-400">prod(npus_count)</span>
+              <span className="text-zinc-400">
+                {isNs3NetworkConfig(bundle.network)
+                  ? "prod(logical_dims)"
+                  : "prod(npus_count)"}
+              </span>
               <span className="font-mono text-lg">{totalNpus}</span>
             </div>
           </div>
@@ -267,7 +310,17 @@ function SystemContent() {
               <span>Topology</span>
               <span>{validating ? "validating..." : ""}</span>
             </div>
-            <TopologyView network={bundle.network} errorDimIdx={errorDimIdx} />
+            {isAnalyticalNetworkConfig(bundle.network) ? (
+              <TopologyView
+                network={bundle.network}
+                errorDimIdx={errorDimIdx}
+              />
+            ) : (
+              <p className="text-sm text-zinc-400">
+                ns-3 uses a packet-level physical topology defined in the
+                ns-3 submodule. No inline visualization.
+              </p>
+            )}
           </div>
 
           <IssueList issues={issues} />
@@ -382,13 +435,18 @@ function NetworkSection({
   dimIds,
   onChange,
 }: {
-  network: NetworkConfig;
+  network: AnalyticalNetworkConfig;
   dimLabels: string[];
   dimIds: string[];
-  onChange: (n: NetworkConfig, labels?: string[], ids?: string[]) => void;
+  onChange: (
+    n: AnalyticalNetworkConfig,
+    labels?: string[],
+    ids?: string[],
+  ) => void;
 }) {
   const setDim = (i: number, patch: Partial<{ topology: TopologyKind; npus_count: number; bandwidth: number; latency: number }>) => {
-    const next: NetworkConfig = {
+    const next: AnalyticalNetworkConfig = {
+      kind: "analytical",
       topology: [...network.topology],
       npus_count: [...network.npus_count],
       bandwidth: [...network.bandwidth],
@@ -404,6 +462,7 @@ function NetworkSection({
   const addDim = () =>
     onChange(
       {
+        kind: "analytical",
         topology: [...network.topology, "Ring"],
         npus_count: [...network.npus_count, 2],
         bandwidth: [...network.bandwidth, 50.0],
@@ -416,6 +475,7 @@ function NetworkSection({
   const removeDim = (i: number) =>
     onChange(
       {
+        kind: "analytical",
         topology: network.topology.filter((_, idx) => idx !== i),
         npus_count: network.npus_count.filter((_, idx) => idx !== i),
         bandwidth: network.bandwidth.filter((_, idx) => idx !== i),
@@ -491,6 +551,102 @@ function NetworkSection({
       >
         + add dim
       </button>
+    </div>
+  );
+}
+
+function Ns3NetworkSection({
+  network,
+  onChange,
+}: {
+  network: Ns3NetworkConfig;
+  onChange: (n: Ns3NetworkConfig) => void;
+}) {
+  // Stable React keys per logical dim so add/remove doesn't confuse
+  // reconciliation — mirrors the analytical `dimIds` pattern.
+  const [dimIds, setDimIds] = useState<string[]>(() =>
+    network.logical_dims.map(() => newDimId()),
+  );
+
+  const setDim = (i: number, value: number) => {
+    const next = [...network.logical_dims];
+    next[i] = value;
+    onChange({ ...network, logical_dims: next });
+  };
+  const addDim = () => {
+    onChange({ ...network, logical_dims: [...network.logical_dims, 2] });
+    setDimIds([...dimIds, newDimId()]);
+  };
+  const removeDim = (i: number) => {
+    onChange({
+      ...network,
+      logical_dims: network.logical_dims.filter((_, idx) => idx !== i),
+    });
+    setDimIds(dimIds.filter((_, idx) => idx !== i));
+  };
+
+  return (
+    <div className="space-y-3">
+      <SectionTitle>Network (ns-3)</SectionTitle>
+      <div className="rounded border border-blue-900/50 bg-blue-950/40 p-3 text-xs text-blue-200">
+        ns-3 combines these <span className="font-mono">logical_dims</span>{" "}
+        with a packet-level physical topology defined in the ns-3 submodule.
+        Edit the file paths below if you want a different physical layout.
+      </div>
+
+      <div>
+        <label className="block text-xs uppercase tracking-wide text-zinc-500">
+          logical_dims
+        </label>
+        <div className="mt-2 space-y-2">
+          {network.logical_dims.map((count, i) => (
+            <div
+              key={dimIds[i] ?? `fallback-${i}`}
+              className="grid grid-cols-[1fr_auto] items-end gap-2"
+            >
+              <Field label={`dim${i} npus`}>
+                <NumInput
+                  value={count}
+                  min={1}
+                  onChange={(v) => setDim(i, v)}
+                />
+              </Field>
+              <button
+                onClick={() => removeDim(i)}
+                disabled={network.logical_dims.length === 1}
+                className="rounded border border-zinc-800 px-2 py-1.5 text-xs text-zinc-400 transition hover:border-red-800 hover:text-red-400 disabled:opacity-40"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={addDim}
+          className="mt-2 rounded border border-dashed border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+        >
+          + add dim
+        </button>
+      </div>
+
+      <Field label="physical_topology_path (relative to frameworks/astra-sim)">
+        <input
+          value={network.physical_topology_path}
+          onChange={(e) =>
+            onChange({ ...network, physical_topology_path: e.target.value })
+          }
+          className="w-full rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs"
+        />
+      </Field>
+      <Field label="mix_config_path (relative to frameworks/astra-sim)">
+        <input
+          value={network.mix_config_path}
+          onChange={(e) =>
+            onChange({ ...network, mix_config_path: e.target.value })
+          }
+          className="w-full rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs"
+        />
+      </Field>
     </div>
   );
 }
