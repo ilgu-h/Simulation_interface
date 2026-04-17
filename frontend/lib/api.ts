@@ -406,6 +406,69 @@ export type CompareResult = {
 export const compareRuns = (a: string, b: string): Promise<CompareResult> =>
   getJson<CompareResult>(`/results/${a}/compare?with=${b}`);
 
+// ---------- ns-3 packet-level stats ----------------------------------------
+
+export type Ns3FlowRow = {
+  sip_hex: string;
+  dip_hex: string;
+  sport: number;
+  dport: number;
+  size_bytes: number;
+  start_time_ns: number;
+  fct_ns: number;
+  standalone_fct_ns: number;
+};
+
+export type Ns3LinkRow = {
+  sip_hex: string;
+  dip_hex: string;
+  flow_count: number;
+  total_bytes: number;
+  avg_fct_ns: number;
+  max_fct_ns: number;
+};
+
+export type Ns3QueueSample = {
+  time_ns: number;
+  switch_id: number;
+  port: number;
+  bytes_: number;
+};
+
+export type Ns3PfcEvent = {
+  time_ns: number;
+  node_id: number;
+  port: number;
+  type_code: number;
+};
+
+export type Ns3View = "flows" | "links" | "qlen" | "pfc";
+
+export const getNs3Stats = <T = unknown>(
+  run_id: string,
+  view: Ns3View,
+): Promise<T[]> => getJson<T[]>(`/results/${run_id}/ns3_stats?view=${view}`);
+
+/** Backend kind for a run, derived from its spec. Used to conditionally
+ *  show ns-3-only UI (heatmap, config.txt viewer). */
+export const getRunBackendKind = async (
+  run_id: string,
+): Promise<"ns3" | "analytical" | null> => {
+  try {
+    const spec = await getJson<{
+      bundle?: { network?: { kind?: string } };
+    }>(`/results/${run_id}/spec`);
+    const kind = spec.bundle?.network?.kind;
+    if (kind === "ns3") return "ns3";
+    return "analytical";
+  } catch {
+    return null;
+  }
+};
+
+export const configTxtUrl = (run_id: string): string =>
+  `${backendUrl()}/runs/${run_id}/artifacts/config.txt`;
+
 export const defaultSystemConfig = (): SystemConfig => ({
   "scheduling-policy": "LIFO",
   "endpoint-delay": 10,

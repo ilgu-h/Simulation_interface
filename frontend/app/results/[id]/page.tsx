@@ -4,17 +4,29 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   compareRuns,
+  configTxtUrl,
+  getNs3Stats,
+  getRunBackendKind,
   getStats,
   getSummary,
   logUrl,
   timelineUrl,
   type CompareResult,
+  type Ns3LinkRow,
   type PerCollectiveRow,
   type PerNpuRow,
   type RunSummary,
 } from "@/lib/api";
 
-type Tab = "summary" | "per_npu" | "per_collective" | "timeline" | "logs" | "compare";
+type Tab =
+  | "summary"
+  | "per_npu"
+  | "per_collective"
+  | "timeline"
+  | "logs"
+  | "compare"
+  | "links"
+  | "config";
 
 export default function ResultsPage({
   params,
@@ -27,12 +39,18 @@ export default function ResultsPage({
   const compareWith = searchParams.compare ?? null;
   const [tab, setTab] = useState<Tab>(compareWith ? "compare" : "summary");
   const [summary, setSummary] = useState<RunSummary | null>(null);
+  const [backendKind, setBackendKind] = useState<"ns3" | "analytical" | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getSummary(runId)
       .then(setSummary)
       .catch((e) => setError((e as Error).message));
+    // Backend kind drives whether ns-3-only tabs render. Parallel fetch
+    // so the UI stays responsive if spec.json is slow or missing.
+    getRunBackendKind(runId).then(setBackendKind);
   }, [runId]);
 
   const tabs: { id: Tab; label: string }[] = [
@@ -40,6 +58,12 @@ export default function ResultsPage({
     { id: "per_npu", label: "Per-NPU" },
     { id: "per_collective", label: "Per-collective" },
     { id: "timeline", label: "Timeline" },
+    ...(backendKind === "ns3"
+      ? ([
+          { id: "links", label: "Links" },
+          { id: "config", label: "Config" },
+        ] as { id: Tab; label: string }[])
+      : []),
     { id: "logs", label: "Logs" },
     { id: "compare", label: "Compare" },
   ];
@@ -92,6 +116,8 @@ export default function ResultsPage({
       {tab === "per_npu" && <PerNpuTab runId={runId} />}
       {tab === "per_collective" && <PerCollectiveTab runId={runId} />}
       {tab === "timeline" && <TimelineTab runId={runId} />}
+      {tab === "links" && <LinksTab runId={runId} />}
+      {tab === "config" && <ConfigTab runId={runId} />}
       {tab === "logs" && <LogsTab runId={runId} />}
       {tab === "compare" && <CompareTab runId={runId} initialOther={compareWith} />}
     </div>
@@ -263,6 +289,172 @@ function TimelineTab({ runId }: { runId: string }) {
         timestamps, so the timeline is approximate (compute and comm bands
         sized to measured cycles; collectives shown as instant markers).
       </p>
+    </div>
+  );
+}
+
+function LinksTab({ runId }: { runId: string }) {
+  const [rows, setRows] = useState<Ns3LinkRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    getNs3Stats<Ns3LinkRow>(runId, "links")
+      .then(setRows)
+      .catch((e) => setError((e as Error).message));
+  }, [runId]);
+
+  if (error) return <ErrorBox message={error} />;
+  if (!rows) return <p className="text-sm text-zinc-500">Loading...</p>;
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-zinc-500">
+        No flows recorded — the workload may not have completed any RDMA queue
+        pairs.
+      </p>
+    );
+  }
+
+  // Build the (src, dst) matrix. Node ids extracted from the low 24 bits of
+  // the hex IP, matching the backend's ip_hex_to_node_id convention.
+  const nodeIdFromHex = (ip: string) => parseInt(ip, 16) & 0xffffff;
+  const nodes = Array.from(
+    new Set(
+      rows.flatMap((r) => [nodeIdFromHex(r.sip_hex), nodeIdFromHex(r.dip_hex)]),
+    ),
+  ).sort((a, b) => a - b);
+  const cellByKey = new Map<string, Ns3LinkRow>();
+  for (const r of rows) {
+    cellByKey.set(`${nodeIdFromHex(r.sip_hex)}->${nodeIdFromHex(r.dip_hex)}`, r);
+  }
+  const maxBytes = Math.max(...rows.map((r) => r.total_bytes));
+
+  // Color scale: blue-700 at hot (1.0) fading to zinc-900 at cold (0.0).
+  const heat = (ratio: number): string => {
+    const alpha = Math.max(0.06, ratio); // keep faint floor visible
+    return `rgba(59, 130, 246, ${alpha.toFixed(2)})`; // Tailwind blue-500
+  };
+
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="text-zinc-400">
+        Per-link communication matrix aggregated from <code>fct.txt</code>. Each
+        cell shows the total bytes flowed from source (row) to destination
+        (column).
+      </p>
+      <div className="overflow-x-auto rounded border border-zinc-800 bg-zinc-950/40 p-3">
+        <table className="min-w-max text-xs">
+          <thead>
+            <tr>
+              <th className="p-1 text-right font-mono text-zinc-500">src\dst</th>
+              {nodes.map((n) => (
+                <th key={n} className="p-1 text-center font-mono text-zinc-500">
+                  {n}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map((src) => (
+              <tr key={src}>
+                <td className="p-1 text-right font-mono text-zinc-500">{src}</td>
+                {nodes.map((dst) => {
+                  const cell = cellByKey.get(`${src}->${dst}`);
+                  const ratio = cell ? cell.total_bytes / maxBytes : 0;
+                  return (
+                    <td
+                      key={dst}
+                      className="border border-zinc-900 p-0"
+                      style={{ backgroundColor: cell ? heat(ratio) : undefined }}
+                      title={
+                        cell
+                          ? `${src}→${dst}: ${prettyBytes(cell.total_bytes)} across ${cell.flow_count} flows · avg fct ${cell.avg_fct_ns.toFixed(0)}ns`
+                          : `${src}→${dst}: no flows`
+                      }
+                    >
+                      <div className="h-8 w-8" />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-xs text-zinc-500">
+        Top {Math.min(rows.length, 10)} pairs (sorted by bytes):
+      </div>
+      <table className="w-full text-sm">
+        <thead className="text-left text-xs text-zinc-500">
+          <tr>
+            <th className="py-1 pr-4">src → dst</th>
+            <th className="py-1 pr-4 text-right">Flows</th>
+            <th className="py-1 pr-4 text-right">Bytes</th>
+            <th className="py-1 pr-4 text-right">Avg FCT (ns)</th>
+            <th className="py-1 pr-4 text-right">Max FCT (ns)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 10).map((r) => (
+            <tr
+              key={`${r.sip_hex}-${r.dip_hex}`}
+              className="border-t border-zinc-900"
+            >
+              <td className="py-1 pr-4 font-mono text-zinc-200">
+                {nodeIdFromHex(r.sip_hex)} → {nodeIdFromHex(r.dip_hex)}
+              </td>
+              <td className="py-1 pr-4 text-right tabular-nums">{r.flow_count}</td>
+              <td className="py-1 pr-4 text-right tabular-nums">
+                {prettyBytes(r.total_bytes)}
+              </td>
+              <td className="py-1 pr-4 text-right tabular-nums">
+                {r.avg_fct_ns.toFixed(0)}
+              </td>
+              <td className="py-1 pr-4 text-right tabular-nums">
+                {r.max_fct_ns.toLocaleString()}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ConfigTab({ runId }: { runId: string }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(configTxtUrl(runId))
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then(setContent)
+      .catch((e) => setError((e as Error).message));
+  }, [runId]);
+
+  if (error) return <ErrorBox message={error} />;
+  if (content === null) return <p className="text-sm text-zinc-500">Loading...</p>;
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="flex items-center justify-between">
+        <p className="text-zinc-400">
+          The exact <code>config.txt</code> ns-3 ran with — materialized from
+          your typed fields plus any <code>extra_overrides</code>. Useful for
+          reproducing a run or diffing against another.
+        </p>
+        <a
+          href={configTxtUrl(runId)}
+          download
+          className="rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 transition hover:border-zinc-500"
+        >
+          Download
+        </a>
+      </div>
+      <pre className="overflow-x-auto rounded border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs text-zinc-200">
+        {content}
+      </pre>
     </div>
   );
 }
