@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+from app.parsers import ns3 as ns3_parsers
 from app.parsers.astra_logs import parse_run_logs, write_parquet
 from app.parsers.astra_logs import to_dataframe as npu_df
 from app.parsers.et_traces import (
@@ -94,6 +95,23 @@ def _et_prefix_for_run(run_id: str) -> str | None:
         except json.JSONDecodeError:
             pass
     return None
+
+
+def _is_ns3_run(run_id: str) -> bool:
+    """Detect ns-3 runs by looking at spec.json bundle.network.kind.
+
+    Falls back to False for old runs without the `kind` discriminator
+    (those are always analytical, since ns-3 only exists on schemas
+    that include the discriminator).
+    """
+    spec_p = _spec_path(run_id)
+    if not spec_p.exists():
+        return False
+    try:
+        spec = json.loads(spec_p.read_text())
+        return spec.get("bundle", {}).get("network", {}).get("kind") == "ns3"
+    except (json.JSONDecodeError, AttributeError):
+        return False
 
 
 # ---------- summary ---------------------------------------------------------
@@ -173,6 +191,47 @@ def get_stats(run_id: str, view: StatsView = "per_npu") -> JSONResponse:
         ops = parse_run_traces(_resolve_traces_for_run(run_id), _et_prefix_for_run(run_id))
         df = aggregate_by_type(ops)
     return JSONResponse(content=json.loads(df.to_json(orient="records")))
+
+
+# ---------- ns-3 stats ------------------------------------------------------
+
+
+Ns3View = Literal["flows", "links", "qlen", "pfc"]
+
+
+@router.get("/{run_id}/ns3_stats")
+def get_ns3_stats(run_id: str, view: Ns3View = "links") -> JSONResponse:
+    """Per-run packet-level stats derived from ns-3's output files.
+
+    Only available for runs that used the ns-3 backend. Analytical runs
+    return 404 since they emit no per-link / flow / queue data.
+
+    Views:
+      flows  — one row per completed RDMA queue pair (from fct.txt)
+      links  — (src, dst) communication matrix aggregated from flows
+      qlen   — switch-buffer samples (from qlen.txt)
+      pfc    — pause/resume events (from pfc.txt; typically empty)
+    """
+    _assert_safe_id(run_id)
+    if not run_dir(run_id).exists():
+        raise HTTPException(404, f"Run {run_id} not found.")
+    if not _is_ns3_run(run_id):
+        raise HTTPException(
+            404,
+            f"Run {run_id} did not use the ns-3 backend; no packet-level stats available.",
+        )
+
+    ldir = logs_dir(run_id)
+    if view == "flows":
+        records = ns3_parsers.as_records(ns3_parsers.parse_fct(ldir / "fct.txt"))
+    elif view == "links":
+        flows = ns3_parsers.parse_fct(ldir / "fct.txt")
+        records = ns3_parsers.as_records(ns3_parsers.summarize_links(flows))
+    elif view == "qlen":
+        records = ns3_parsers.as_records(ns3_parsers.parse_qlen(ldir / "qlen.txt"))
+    else:  # pfc
+        records = ns3_parsers.as_records(ns3_parsers.parse_pfc(ldir / "pfc.txt"))
+    return JSONResponse(content=records)
 
 
 # ---------- timeline (Chrome Tracing JSON) ---------------------------------

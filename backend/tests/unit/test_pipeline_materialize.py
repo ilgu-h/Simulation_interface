@@ -110,3 +110,71 @@ def test_ns3_preserves_unknown_base_keys(tmp_path):
     assert "FLOW_FILE" in content
     assert "FCT_OUTPUT_FILE" in content
     assert "SOMETHING_WE_DONT_MODEL 42" in content
+
+
+def test_ns3_redirects_output_paths_into_run_logs():
+    """ns-3 output files must land in runs/<id>/logs/ so the parser can find
+    them and concurrent runs don't race on shared scratch output.
+
+    This test pins that contract — removing the redirect would silently
+    break the results API since fct.txt/qlen.txt/pfc.txt/mix.tr would
+    still go to ns-3's shared scratch/output/ directory.
+    """
+    from app.storage.fs_layout import logs_dir
+
+    bundle = ConfigBundle(
+        backend="ns3",
+        network=NS3NetworkConfig(logical_dims=[8]),
+    )
+    run_id = new_run_id()
+    cdir = _materialize(bundle, run_id)
+    content = (cdir / "config.txt").read_text()
+
+    expected_logs = str(logs_dir(run_id))
+    # Each of the four output paths should point into this run's logs/.
+    for key, filename in [
+        ("FCT_OUTPUT_FILE", "fct.txt"),
+        ("PFC_OUTPUT_FILE", "pfc.txt"),
+        ("QLEN_MON_FILE", "qlen.txt"),
+        ("TRACE_OUTPUT_FILE", "mix.tr"),
+    ]:
+        line = next(
+            (line for line in content.splitlines() if line.startswith(f"{key} ")),
+            None,
+        )
+        assert line is not None, f"{key} missing from config.txt"
+        assert line == f"{key} {expected_logs}/{filename}", (
+            f"{key} not redirected to run logs dir: {line!r}"
+        )
+
+
+def test_ns3_extra_overrides_win_over_typed_fields(tmp_path):
+    """extra_overrides is overlaid LAST and can clobber typed defaults.
+
+    Documented as the escape hatch: if the UI hasn't caught up to a new
+    ns-3 knob, users drop it into extra_overrides and it beats whatever
+    the schema serialized. This test locks that guarantee in — a future
+    refactor that merges extra_overrides first would break the contract
+    and this test would catch it.
+    """
+    fake_base = tmp_path / "base_config.txt"
+    fake_base.write_text("FLOW_FILE ../../scratch/output/flow.txt\n")
+
+    bundle = ConfigBundle(
+        backend="ns3",
+        network=NS3NetworkConfig(
+            logical_dims=[8],
+            cc_mode=1,  # typed field says DCQCN (1)
+            extra_overrides={"CC_MODE": "3"},  # raw override says HPCC (3)
+            mix_config_path=str(fake_base),
+        ),
+    )
+    run_id = new_run_id()
+    cdir = _materialize(bundle, run_id)
+    content = (cdir / "config.txt").read_text()
+
+    # The raw override wins at serialization time.
+    cc_lines = [line for line in content.splitlines() if line.startswith("CC_MODE ")]
+    assert cc_lines == ["CC_MODE 3"], (
+        f"extra_overrides should override typed field, got {cc_lines}"
+    )
