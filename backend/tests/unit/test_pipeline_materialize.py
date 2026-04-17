@@ -78,17 +78,35 @@ def test_ns3_writes_per_run_config_txt():
     assert "extern/network_backend/ns-3/" not in topology_line
 
 
-def test_ns3_preserves_unknown_base_keys():
+def test_ns3_preserves_unknown_base_keys(tmp_path):
     """Keys present in the base config.txt but not in the schema pass through
-    unchanged (graceful handling of upstream ns-3 drift)."""
+    unchanged (graceful handling of upstream ns-3 drift).
+
+    Uses an in-test base file (tmp_path) rather than the shipped ns-3 one
+    so the assertion doesn't depend on the ns-3 submodule being cloned
+    (which CI skips — ns-3 is opt-in, see scripts/bootstrap.sh).
+    """
+    fake_base = tmp_path / "base_config.txt"
+    fake_base.write_text(
+        "FLOW_FILE ../../scratch/output/flow.txt\n"
+        "FCT_OUTPUT_FILE ../../scratch/output/fct.txt\n"
+        "SOMETHING_WE_DONT_MODEL 42\n"
+    )
+
     bundle = ConfigBundle(
         backend="ns3",
-        network=NS3NetworkConfig(logical_dims=[8]),
+        network=NS3NetworkConfig(
+            logical_dims=[8],
+            # Absolute path overrides the default astra-sim-relative one
+            # (pathlib: `a / abs_b == abs_b`).
+            mix_config_path=str(fake_base),
+        ),
     )
     run_id = new_run_id()
     cdir = _materialize(bundle, run_id)
     content = (cdir / "config.txt").read_text()
-    # FLOW_FILE is in the base config.txt but not modeled in our schema.
-    # It must survive the overlay.
+
+    # Keys from the fake base survive the overlay unchanged.
     assert "FLOW_FILE" in content
     assert "FCT_OUTPUT_FILE" in content
+    assert "SOMETHING_WE_DONT_MODEL 42" in content
