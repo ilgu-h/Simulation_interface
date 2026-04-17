@@ -14,6 +14,13 @@ import {
 type Event =
   | { ts: string; kind: "status"; status: RunStatusValue }
   | { ts: string; kind: "log"; text: string }
+  | {
+      ts: string;
+      kind: "progress";
+      text: string;
+      finished: number;
+      total: number;
+    }
   | { ts: string; kind: "done"; ok: boolean; returncode: number | null }
   | { ts: string; kind: "error"; text: string };
 
@@ -25,6 +32,11 @@ export default function RunPage({ params }: { params: { id: string } }) {
   const [doneAt, setDoneAt] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [meta, setMeta] = useState<RunStatus | null>(null);
+  const [progress, setProgress] = useState<{
+    text: string;
+    finished: number;
+    total: number;
+  } | null>(null);
   const logRef = useRef<HTMLPreElement | null>(null);
   const sseRef = useRef<EventSource | null>(null);
 
@@ -49,6 +61,12 @@ export default function RunPage({ params }: { params: { id: string } }) {
           setStatus(ev.status);
         } else if (ev.kind === "log") {
           setLines((prev) => prev.concat(ev.text));
+        } else if (ev.kind === "progress") {
+          setProgress({
+            text: ev.text,
+            finished: ev.finished,
+            total: ev.total,
+          });
         } else if (ev.kind === "done") {
           setReturncode(ev.returncode);
           setDoneAt(ev.ts);
@@ -130,6 +148,29 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {err && (
         <div className="rounded border border-red-900/60 bg-red-950/40 p-3 text-sm text-red-200">
           {err}
+        </div>
+      )}
+
+      {progress && isLive && (
+        <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-zinc-300">{progress.text}</span>
+            {progress.total > 0 && (
+              <span className="font-mono text-xs text-zinc-400">
+                {progress.finished} / {progress.total} NPUs
+              </span>
+            )}
+          </div>
+          {progress.total > 0 && (
+            <div className="mt-2 h-1 w-full overflow-hidden rounded bg-zinc-800">
+              <div
+                className="h-full bg-blue-500 transition-all"
+                style={{
+                  width: `${(progress.finished / progress.total) * 100}%`,
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 
