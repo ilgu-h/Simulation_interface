@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Discriminator, Field, Tag, model_validator
 
@@ -154,9 +154,9 @@ def _network_kind(v: Any) -> str:
 
 
 NetworkConfigUnion = Annotated[
-    Union[
-        Annotated[AnalyticalNetworkConfig, Tag("analytical")],
-        Annotated[NS3NetworkConfig, Tag("ns3")],
-    ],
+    (
+        Annotated[AnalyticalNetworkConfig, Tag("analytical")]
+        | Annotated[NS3NetworkConfig, Tag("ns3")]
+    ),
     Discriminator(_network_kind),
 ]
