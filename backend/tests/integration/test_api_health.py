@@ -69,6 +69,44 @@ async def test_configs_validate_npu_mismatch(client):
     assert any("mismatch" in i["message"].lower() or "expects" in i["message"] for i in d["issues"])
 
 
+async def test_configs_validate_ns3_variant(client):
+    # Discriminator picks NS3 variant; total_npus is computed from logical_dims.
+    resp = await client.post(
+        "/configs/validate",
+        json={
+            "backend": "ns3",
+            "system": {},
+            "network": {"kind": "ns3", "logical_dims": [4, 2]},
+            "memory": {},
+            "expected_npus": 8,
+        },
+    )
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["ok"] is True
+    assert d["total_npus"] == 8
+    # No errors expected; warnings may or may not appear depending on whether
+    # the ns-3 submodule is cloned and the binary is built.
+    assert all(i["severity"] != "error" for i in d["issues"])
+
+
+async def test_configs_validate_ns3_npu_mismatch(client):
+    resp = await client.post(
+        "/configs/validate",
+        json={
+            "backend": "ns3",
+            "system": {},
+            "network": {"kind": "ns3", "logical_dims": [4, 2]},
+            "memory": {},
+            "expected_npus": 16,
+        },
+    )
+    d = resp.json()
+    assert d["ok"] is False
+    fields = {i["field"] for i in d["issues"] if i["severity"] == "error"}
+    assert "network.logical_dims" in fields
+
+
 async def test_configs_materialize(client):
     resp = await client.post(
         "/configs/materialize",
