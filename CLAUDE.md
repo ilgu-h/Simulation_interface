@@ -81,10 +81,37 @@ FORCE=1 bash scripts/build_backends.sh                # rebuild
 
 ## ns-3 backend quirks
 
-- **Separate config file:** ns-3 uses `config.txt` (plain-text key-value, not YAML) for its physical topology; it lives inside the ns-3 submodule (`extern/network_backend/ns-3/scratch/config/config.txt`). The UI lets users edit the path but not the file contents — physical topology editing happens in-place.
-- **Logical vs physical split:** the UI's `logical_dims` array feeds `--logical-topology-configuration` (a small JSON); `--network-configuration` points at the ns-3 `config.txt`. Analytical uses a single `network.yml` for both concerns.
-- **cwd matters:** the ns-3 binary expects to run from `ns-3/build/scratch/` so that `config.txt`'s relative paths (`../../scratch/topology/...`) resolve. The orchestrator sets this automatically.
+- **Separate config file:** ns-3 uses `config.txt` (plain-text key-value, not YAML) for its physical topology and per-link behavior. The shipped base lives at `extern/network_backend/ns-3/scratch/config/config.txt`. The UI exposes ~42 typed fields covering every key in that file; on materialize, the backend parses the base, overlays user overrides, and writes `runs/<id>/configs/config.txt` which is what ns-3 actually reads.
+- **Logical vs physical split:** the UI's `logical_dims` array feeds `--logical-topology-configuration` (a small JSON); `--network-configuration` points at the per-run `config.txt`. Analytical uses a single `network.yml` for both concerns.
+- **cwd matters:** the ns-3 binary expects to run from `ns-3/build/scratch/` so that `config.txt`'s relative paths (`../../scratch/topology/...`) resolve. The orchestrator sets this automatically. The schema's `physical_topology_path` is project-relative; it gets rewritten to a cwd-relative path when emitted into the per-run `config.txt`.
 - **CLI flag differences:** ns-3 accepts `--logical-topology-configuration` (analytical doesn't) and rejects `--logging-folder` (analytical requires it). `AstraInvocation.emit_logging_folder` toggles this.
+
+## ns-3 configuration UI
+
+All ~42 keys from ns-3's `config.txt` are surfaced as typed Pydantic fields on `NS3NetworkConfig` and rendered in the UI via `frontend/components/ns3/Ns3AdvancedSection.tsx`. Layout serves two audiences:
+
+- **Normal users:** see logical dims + an "Essentials" card (CC_MODE, PACKET_PAYLOAD_SIZE, BUFFER_SIZE, ERROR_RATE_PER_LINK, ENABLE_QCN, RATE_AI/HAI/MIN_RATE) open by default.
+- **HW engineers:** click into 9 collapsed accordions for the other 34+ knobs (rates, CC tuning, HPCC window, ECN maps, global switches, packet layer, timing, link control, raw overrides).
+
+**CC_MODE enum** (values as accepted by ns-3's `rdma-hw.cc`):
+
+| Value | Name | Status |
+|------:|------|--------|
+| 1  | DCQCN | implemented |
+| 3  | HPCC | implemented |
+| 7  | TIMELY | implemented |
+| 8  | DCTCP | implemented |
+| 10 | PINT | implemented |
+| 11 | HPCC-PINT | experimental — no code in rdma-hw.cc |
+| 12 | HPCC-PINT-HAI | experimental — no code in rdma-hw.cc |
+
+11 and 12 appear in the shipped default config.txt and upstream docs but the ns-3 parser silently ignores unknown CC_MODE values, so these fall through to a default implementation. The UI shows an amber warning when either is selected. Default schema value is `12` to preserve upstream-compatible behavior.
+
+**Escape hatch:** `extra_overrides: dict[str, str]` on `NS3NetworkConfig` maps to a "Raw overrides" accordion. Keys here are merged after typed fields (so they can even override schema defaults if needed). Use it for future config.txt keys we haven't modeled yet.
+
+**Map validators:** `KMAX_MAP`, `KMIN_MAP`, `PMAX_MAP` must all have the same row count with matching `bandwidth_bps` values per row, and `kmin.threshold <= kmax.threshold`. Enforced at schema level so a broken map never reaches the simulator.
+
+**Per-run config.txt inspection:** `runs/<id>/configs/config.txt` is written for every ns-3 run and preserved in artifacts. Open it to see the exact parameters the simulator ran with — useful for reproducibility and when debugging why two runs produced different cycles.
 
 ## Testing
 

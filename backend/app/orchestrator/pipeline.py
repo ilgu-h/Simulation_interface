@@ -28,6 +28,11 @@ from app.api.system import ConfigBundle
 from app.build.backend_adapter import BackendAdapter, get_backend, is_built
 from app.orchestrator.astra_runner import build_invocation, stream_run
 from app.schemas.network_config import AnalyticalNetworkConfig, NS3NetworkConfig
+from app.schemas.ns3_config_parser import (
+    apply_overrides_dict,
+    parse_config_txt,
+    write_config_txt,
+)
 from app.storage.fs_layout import configs_dir, logs_dir, run_dir
 from app.storage.registry import Artifact, Run, get_engine
 
@@ -187,13 +192,54 @@ def _materialize(bundle: ConfigBundle, run_id: str) -> Path:
     if isinstance(bundle.network, AnalyticalNetworkConfig):
         (cdir / "network.yml").write_text(bundle.network.to_yaml())
     elif isinstance(bundle.network, NS3NetworkConfig):
-        # ns-3 needs a logical topology JSON (we materialize) plus physical
-        # topology + mix/config.txt which live inside the ns-3 submodule and
-        # are referenced by path (not copied).
+        # ns-3 needs a logical topology JSON (we materialize) plus a
+        # per-run config.txt built by overlaying the user's typed fields
+        # on the shipped ns-3 base config (preserves unknown upstream
+        # keys like FLOW_FILE, TRACE_FILE). The physical topology file
+        # itself stays inside the ns-3 submodule and is referenced by
+        # path.
         (cdir / "logical_topology.json").write_text(
             bundle.network.to_logical_topology_json()
         )
+        _materialize_ns3_config(bundle.network, cdir)
     return cdir
+
+
+def _materialize_ns3_config(network: NS3NetworkConfig, cdir: Path) -> None:
+    """Write runs/<id>/configs/config.txt = base config.txt + typed overrides.
+
+    Base comes from the ns-3 submodule at the user-supplied mix_config_path.
+    If the base file is missing (pre-bootstrap or user-typo path) we fall
+    back to emitting just the typed fields — the resulting config.txt
+    will be sparse but the simulator will still run with those values
+    for the keys we set.
+
+    The schema's ``physical_topology_path`` is project-relative (e.g.
+    ``extern/network_backend/ns-3/scratch/topology/...``). ns-3 opens it
+    relative to the run cwd (``ns-3/build/scratch``). We rewrite the
+    TOPOLOGY_FILE key accordingly so the user sees a clean project-tree
+    path in the UI but the simulator gets what it actually needs.
+    """
+    import os
+    from collections import OrderedDict
+
+    astra_sim_root = REPO_ROOT / "frameworks" / "astra-sim"
+    base_path = astra_sim_root / network.mix_config_path
+    base: OrderedDict[str, str] = (
+        parse_config_txt(base_path.read_text())
+        if base_path.is_file()
+        else OrderedDict()
+    )
+    merged = apply_overrides_dict(base, network.to_config_txt_dict())
+
+    # Rewrite TOPOLOGY_FILE to a path relative to the ns-3 cwd.
+    ns3_build_scratch = (
+        astra_sim_root / "extern" / "network_backend" / "ns-3" / "build" / "scratch"
+    )
+    topology_abs = astra_sim_root / network.physical_topology_path
+    merged["TOPOLOGY_FILE"] = os.path.relpath(topology_abs, ns3_build_scratch)
+
+    (cdir / "config.txt").write_text(write_config_txt(merged))
 
 
 # ----- main pipeline --------------------------------------------------------
@@ -234,17 +280,18 @@ def execute_pipeline(run_id: str, bundle: ConfigBundle, workload_prefix: Path) -
     _set_status(run_id, "running")
 
     # ns-3 runs need extra wiring: --network-configuration points at the
-    # ns-3 mix/config.txt (inside the ns-3 submodule), and a separate
-    # --logical-topology-configuration flag carries the per-run logical dims.
-    # The binary must also run with cwd=ns-3/build/scratch because the
-    # shipped config.txt references topology files via relative paths like
-    # "../../scratch/topology/...".
+    # per-run config.txt we materialized in _materialize_ns3_config (which
+    # overlays user overrides onto the shipped ns-3 base config), and a
+    # separate --logical-topology-configuration flag carries the per-run
+    # logical dims. The binary must also run with cwd=ns-3/build/scratch
+    # because the config.txt references topology files via relative paths
+    # like "../../scratch/topology/...".
     network_config_override: Path | None = None
     logical_topology_config: Path | None = None
     cwd: Path | None = None
     if isinstance(bundle.network, NS3NetworkConfig):
         astra_sim_root = REPO_ROOT / "frameworks" / "astra-sim"
-        network_config_override = astra_sim_root / bundle.network.mix_config_path
+        network_config_override = cdir / "config.txt"
         logical_topology_config = cdir / "logical_topology.json"
         ns3_scratch_build = (
             astra_sim_root / "extern" / "network_backend" / "ns-3" / "build" / "scratch"

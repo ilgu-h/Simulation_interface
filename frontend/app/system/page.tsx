@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
+import { Ns3AdvancedSection } from "@/components/ns3/Ns3AdvancedSection";
 import { TopologyView } from "@/components/topology/TopologyView";
 import {
   defaultMemoryConfig,
@@ -24,7 +25,6 @@ import {
   type MemoryConfig,
   type MemoryType,
   type NetworkConfig,
-  type Ns3NetworkConfig,
   type SystemConfig,
   type TopologyKind,
 } from "@/lib/api";
@@ -255,7 +255,7 @@ function SystemContent() {
               }}
             />
           ) : (
-            <Ns3NetworkSection
+            <Ns3AdvancedSection
               network={bundle.network}
               onChange={setNetwork}
             />
@@ -551,102 +551,6 @@ function NetworkSection({
       >
         + add dim
       </button>
-    </div>
-  );
-}
-
-function Ns3NetworkSection({
-  network,
-  onChange,
-}: {
-  network: Ns3NetworkConfig;
-  onChange: (n: Ns3NetworkConfig) => void;
-}) {
-  // Stable React keys per logical dim so add/remove doesn't confuse
-  // reconciliation — mirrors the analytical `dimIds` pattern.
-  const [dimIds, setDimIds] = useState<string[]>(() =>
-    network.logical_dims.map(() => newDimId()),
-  );
-
-  const setDim = (i: number, value: number) => {
-    const next = [...network.logical_dims];
-    next[i] = value;
-    onChange({ ...network, logical_dims: next });
-  };
-  const addDim = () => {
-    onChange({ ...network, logical_dims: [...network.logical_dims, 2] });
-    setDimIds([...dimIds, newDimId()]);
-  };
-  const removeDim = (i: number) => {
-    onChange({
-      ...network,
-      logical_dims: network.logical_dims.filter((_, idx) => idx !== i),
-    });
-    setDimIds(dimIds.filter((_, idx) => idx !== i));
-  };
-
-  return (
-    <div className="space-y-3">
-      <SectionTitle>Network (ns-3)</SectionTitle>
-      <div className="rounded border border-blue-900/50 bg-blue-950/40 p-3 text-xs text-blue-200">
-        ns-3 combines these <span className="font-mono">logical_dims</span>{" "}
-        with a packet-level physical topology defined in the ns-3 submodule.
-        Edit the file paths below if you want a different physical layout.
-      </div>
-
-      <div>
-        <label className="block text-xs uppercase tracking-wide text-zinc-500">
-          logical_dims
-        </label>
-        <div className="mt-2 space-y-2">
-          {network.logical_dims.map((count, i) => (
-            <div
-              key={dimIds[i] ?? `fallback-${i}`}
-              className="grid grid-cols-[1fr_auto] items-end gap-2"
-            >
-              <Field label={`dim${i} npus`}>
-                <NumInput
-                  value={count}
-                  min={1}
-                  onChange={(v) => setDim(i, v)}
-                />
-              </Field>
-              <button
-                onClick={() => removeDim(i)}
-                disabled={network.logical_dims.length === 1}
-                className="rounded border border-zinc-800 px-2 py-1.5 text-xs text-zinc-400 transition hover:border-red-800 hover:text-red-400 disabled:opacity-40"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-        <button
-          onClick={addDim}
-          className="mt-2 rounded border border-dashed border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
-        >
-          + add dim
-        </button>
-      </div>
-
-      <Field label="physical_topology_path (relative to frameworks/astra-sim)">
-        <input
-          value={network.physical_topology_path}
-          onChange={(e) =>
-            onChange({ ...network, physical_topology_path: e.target.value })
-          }
-          className="w-full rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs"
-        />
-      </Field>
-      <Field label="mix_config_path (relative to frameworks/astra-sim)">
-        <input
-          value={network.mix_config_path}
-          onChange={(e) =>
-            onChange({ ...network, mix_config_path: e.target.value })
-          }
-          className="w-full rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs"
-        />
-      </Field>
     </div>
   );
 }

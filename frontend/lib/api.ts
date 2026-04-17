@@ -106,11 +106,92 @@ export type AnalyticalNetworkConfig = {
   latency: number[];
 };
 
+/**
+ * ns-3 congestion control modes. Only 1/3/7/8/10 are implemented in
+ * astra-sim's rdma-hw.cc; 11/12 appear in upstream docs + the shipped
+ * default but have no code. Mirrors the backend `CCMode` literal.
+ */
+export type CCMode = 1 | 3 | 7 | 8 | 10 | 11 | 12;
+
+export const CC_MODE_OPTIONS: ReadonlyArray<{ value: CCMode; label: string; experimental: boolean }> = [
+  { value: 1, label: "DCQCN (1)", experimental: false },
+  { value: 3, label: "HPCC (3)", experimental: false },
+  { value: 7, label: "TIMELY (7)", experimental: false },
+  { value: 8, label: "DCTCP (8)", experimental: false },
+  { value: 10, label: "PINT (10)", experimental: false },
+  { value: 11, label: "HPCC-PINT (11, experimental)", experimental: true },
+  { value: 12, label: "HPCC-PINT-HAI (12, experimental)", experimental: true },
+];
+
+export type EcnThresholdEntry = { bandwidth_bps: number; threshold: number };
+export type EcnProbabilityEntry = { bandwidth_bps: number; probability: number };
+export type LinkDown = { src: number; dst: number; time: number };
+
 export type Ns3NetworkConfig = {
   kind: "ns3";
   logical_dims: number[];
   physical_topology_path: string;
   mix_config_path: string;
+
+  // Essentials
+  cc_mode: CCMode;
+  packet_payload_size: number;
+  buffer_size: number;
+  error_rate_per_link: number;
+  enable_qcn: boolean;
+  rate_ai: string;
+  rate_hai: string;
+  min_rate: string;
+
+  // Congestion control tuning
+  alpha_resume_interval: number;
+  rate_decrease_interval: number;
+  rp_timer: number;
+  ewma_gain: number;
+  fast_recovery_times: number;
+  clamp_target_rate: boolean;
+
+  // HPCC / window advanced
+  has_win: boolean;
+  global_t: number;
+  var_win: boolean;
+  fast_react: boolean;
+  u_target: number;
+  mi_thresh: number;
+  int_multi: number;
+  pint_log_base: number;
+  pint_prob: number;
+  multi_rate: boolean;
+  sample_feedback: boolean;
+  rate_bound: boolean;
+  dctcp_rate_ai: string;
+
+  // Global switches
+  use_dynamic_pfc_threshold: boolean;
+  enable_trace: boolean;
+  ack_high_prio: boolean;
+  l2_back_to_zero: boolean;
+
+  // Packet / link layer
+  l2_chunk_size: number;
+  l2_ack_interval: number;
+  nic_total_pause_time: number;
+
+  // Timing (picoseconds)
+  simulator_stop_time: number;
+  qlen_mon_start: number;
+  qlen_mon_end: number;
+
+  // ECN threshold maps
+  kmax_map: EcnThresholdEntry[];
+  kmin_map: EcnThresholdEntry[];
+  pmax_map: EcnProbabilityEntry[];
+
+  // Link control
+  link_down: LinkDown;
+
+  // Escape hatch — keys not modeled above
+  extra_overrides: Record<string, string>;
 };
 
 export type NetworkConfig = AnalyticalNetworkConfig | Ns3NetworkConfig;
@@ -347,12 +428,82 @@ export const defaultNetworkConfig = (): AnalyticalNetworkConfig => ({
   latency: [500.0],
 });
 
+const NS3_ECN_DEFAULT_BANDWIDTHS: ReadonlyArray<number> = [
+  25_000_000_000, 40_000_000_000, 100_000_000_000,
+  200_000_000_000, 400_000_000_000, 2_400_000_000_000,
+];
+const NS3_KMAX_DEFAULTS: ReadonlyArray<number> = [400, 800, 1600, 2400, 3200, 3200];
+const NS3_KMIN_DEFAULTS: ReadonlyArray<number> = [100, 200, 400, 600, 800, 800];
+
 export const defaultNs3NetworkConfig = (): Ns3NetworkConfig => ({
   kind: "ns3",
   logical_dims: [8],
   physical_topology_path:
     "extern/network_backend/ns-3/scratch/topology/8_nodes_1_switch_topology.txt",
   mix_config_path: "extern/network_backend/ns-3/scratch/config/config.txt",
+
+  // Essentials
+  cc_mode: 12,
+  packet_payload_size: 1000,
+  buffer_size: 32,
+  error_rate_per_link: 0.0,
+  enable_qcn: true,
+  rate_ai: "50Mb/s",
+  rate_hai: "100Mb/s",
+  min_rate: "100Mb/s",
+
+  // Congestion control tuning
+  alpha_resume_interval: 1,
+  rate_decrease_interval: 4,
+  rp_timer: 900,
+  ewma_gain: 0.00390625,
+  fast_recovery_times: 1,
+  clamp_target_rate: false,
+
+  // HPCC / window advanced
+  has_win: true,
+  global_t: 0,
+  var_win: true,
+  fast_react: true,
+  u_target: 0.95,
+  mi_thresh: 0,
+  int_multi: 1,
+  pint_log_base: 1.05,
+  pint_prob: 1.0,
+  multi_rate: false,
+  sample_feedback: false,
+  rate_bound: true,
+  dctcp_rate_ai: "1000Mb/s",
+
+  // Global switches
+  use_dynamic_pfc_threshold: true,
+  enable_trace: true,
+  ack_high_prio: false,
+  l2_back_to_zero: false,
+
+  // Packet / link layer
+  l2_chunk_size: 4000,
+  l2_ack_interval: 1,
+  nic_total_pause_time: 0,
+
+  // Timing (picoseconds)
+  simulator_stop_time: 4e13,
+  qlen_mon_start: 0,
+  qlen_mon_end: 20000,
+
+  // ECN threshold maps — match backend defaults per NIC bandwidth
+  kmax_map: NS3_ECN_DEFAULT_BANDWIDTHS.map((bandwidth_bps, i) => ({
+    bandwidth_bps, threshold: NS3_KMAX_DEFAULTS[i],
+  })),
+  kmin_map: NS3_ECN_DEFAULT_BANDWIDTHS.map((bandwidth_bps, i) => ({
+    bandwidth_bps, threshold: NS3_KMIN_DEFAULTS[i],
+  })),
+  pmax_map: NS3_ECN_DEFAULT_BANDWIDTHS.map((bandwidth_bps) => ({
+    bandwidth_bps, probability: 0.2,
+  })),
+
+  link_down: { src: 0, dst: 0, time: 0 },
+  extra_overrides: {},
 });
 
 /**
