@@ -11,6 +11,7 @@
 3. [Web Interface Guide](#3-web-interface-guide)
 4. [Workload Management](#4-workload-management)
 5. [System Configuration](#5-system-configuration)
+   - 5.5. [ns-3 Packet-Level Backend](#55-ns-3-packet-level-backend)
 6. [Running Simulations](#6-running-simulations)
 7. [Interpreting Results](#7-interpreting-results)
 8. [Glossary](#8-glossary)
@@ -58,6 +59,22 @@ bash scripts/bootstrap.sh
 | 8 | Build ASTRA-sim analytical backend binaries |
 
 The entire process takes 10–20 minutes depending on your system.
+
+#### Opting into the ns-3 packet-level backend
+
+The default bootstrap only builds the analytical backend. To additionally build ns-3 (packet-level simulation with congestion control):
+
+```bash
+ENABLE_NS3=1 bash scripts/bootstrap.sh
+```
+
+This adds three steps on top of the default flow:
+
+1. Clones the ns-3 submodule at `extern/network_backend/ns-3`
+2. Installs `libopenmpi-dev` + `openmpi-bin` via `apt` (requires sudo)
+3. Builds the `AstraSim_NS3` binary and symlinks it to a stable registry path
+
+ns-3 runs are 10–100× slower than analytical but model packets, queues, ECN marking, and congestion control accurately. See [Section 5.5](#55-ns-3-packet-level-backend) for when to use it and how to configure it.
 
 ### 1.3 Verifying the Build
 
@@ -245,7 +262,7 @@ A two-column layout for configuring the simulation environment:
 
 #### Left column — Configuration
 - **Workload context banner** (conditional): when arriving from the Workload page via "Configure System →", a blue banner shows the parallelism dimensions (e.g., "**4 NPUs** — DP=2 × TP=2 × SP=1 × PP=1") and the workload prefix. The network NPU count and "Expected NPU count" cross-check are auto-filled to match. The banner is dismissible with ×. When accessing the page directly (no URL params), no banner appears and the page works as before.
-- **Backend picker**: dropdown selecting the simulation backend (Analytical Congestion Unaware, Analytical Congestion Aware, or NS-3 stub). Shows "built" or "needs build" status.
+- **Backend picker**: dropdown selecting the simulation backend (Analytical Congestion Unaware, Analytical Congestion Aware, or ns-3). Shows "built" or "needs build" status. When **ns-3** is selected, the Network section is replaced by the ns-3 advanced configuration panel (see [Section 5.5](#55-ns-3-packet-level-backend)) — logical dimensions, an "Essentials" card with the most-used knobs, and nine collapsed accordions for the full ~42-field surface.
 - **Network section**: multi-dimensional topology editor
   - Each dimension row has: topology type (Ring/FullyConnected/Switch), NPU count, bandwidth (GB/s), latency (ns), delete button
   - **"+ add dim"** button adds a new dimension with defaults (Ring, 2 NPUs, 50 GB/s, 500 ns)
@@ -294,10 +311,11 @@ Live simulation monitoring via Server-Sent Events (SSE):
   - Amber: build progress (`[build]`)
   - Blue: simulation progress (`[run]`)
   - Gray: cancellation messages
+- **Progress bar** (ns-3 runs): a `finished / total NPUs` indicator with a horizontal fill bar appears whenever a `progress` event arrives. ns-3 runs can be minutes long; the bar lets you see forward motion between the occasional log bursts. During stretches of silence the event stream also emits a heartbeat every 30 seconds so the run never looks indistinguishable from a hang.
 
 ### 3.7 Results (`/results/[id]`)
 
-Six tabs for analyzing simulation output:
+Six tabs for analyzing simulation output, plus two ns-3-only tabs that appear automatically when the run used the ns-3 backend:
 
 #### Summary tab
 Four metric cards:
@@ -351,6 +369,23 @@ Side-by-side comparison of two runs:
    - **A wall** and **B wall**: end-to-end cycles for each run
    - **Delta B − A**: cycle difference and percentage (green if faster, amber if slower)
    - **Config diffs table**: every config parameter that differs between the two runs
+
+#### Links tab (ns-3 runs only)
+Packet-level communication stats derived from ns-3's `fct.txt` output:
+
+- **Heatmap matrix**: rows = source nodes, columns = destination nodes. Cell color intensity encodes total bytes for that `(src, dst)` flow pair — hot links stand out at a glance. Hover a cell for the full tooltip (flow count, bytes, avg/max FCT).
+- **Top-10 pairs table**: the ten hottest `src → dst` pairs by total bytes, with flow count, byte volume, and FCT statistics per pair.
+
+Useful for spotting hotspot links, validating that your parallelism layout matches the physical topology, and comparing how different congestion-control modes redistribute load.
+
+#### Config tab (ns-3 runs only)
+Inline view of the exact `config.txt` ns-3 ran with, plus a **Download** button. This is the file ns-3 read at launch — typed schema fields, `extra_overrides`, ECN maps, and output-path redirects all already applied. Use it for:
+
+- Reproducing a run (feed the downloaded file as a base config for a future run)
+- Verifying overrides (check that a UI change actually reached the simulator)
+- Diffing two runs' physical parameters when comparing cycles
+
+Analytical runs don't have this tab — they use `network.yml` which is already visible via `/results/<id>/spec`.
 
 ---
 
@@ -595,11 +630,137 @@ In the System page, selecting a memory type other than **No memory expansion** r
 
 ### 5.4 Backend Selection
 
-| Backend | Description |
-|---------|-------------|
-| **Analytical Congestion Unaware** (`analytical_cu`) | Fast analytical model — no congestion modeling. Best for quick iteration. |
-| **Analytical Congestion Aware** (`analytical_ca`) | Analytical model with congestion — more accurate but slower. |
-| **NS-3** (`ns3`) | Packet-level network simulation (stub — not yet built). |
+| Backend | Description | Typical runtime |
+|---------|-------------|-----------------|
+| **Analytical Congestion Unaware** (`analytical_cu`) | Fast analytical model — no congestion modeling. Best for quick iteration. | ms–seconds |
+| **Analytical Congestion Aware** (`analytical_ca`) | Analytical model with congestion approximation — more accurate but slower. | seconds |
+| **ns-3** (`ns3`) | Packet-level network simulation with real queues, ECN marking, and congestion-control algorithms (DCQCN, HPCC, TIMELY, DCTCP, PINT). Opt-in: requires `ENABLE_NS3=1 bash scripts/bootstrap.sh`. See [Section 5.5](#55-ns-3-packet-level-backend) for configuration. | minutes–hours |
+
+**When to pick ns-3** over analytical:
+- You need per-link utilization, flow-completion-time distributions, or queue-depth data — analytical models summarize these away.
+- You're evaluating a congestion-control algorithm (HPCC vs DCQCN vs DCTCP).
+- You've narrowed down a workload configuration with analytical and want high-fidelity numbers before making hardware decisions.
+
+For everything else — topology sweeps, parallelism trade-off exploration, quick sanity checks — analytical is the right default.
+
+### 5.5 ns-3 Packet-Level Backend
+
+The ns-3 backend turns every hop into a real packet-level simulation: link queues fill and drain, RED/ECN marks packets, congestion-control algorithms react to feedback, and flow completion times reflect actual contention. In exchange for 10–100× the runtime of analytical, you get per-link utilization, queue occupancy samples, PFC pause events, and per-flow FCT data — the raw material for hardware-validation studies.
+
+This section assumes you've already run `ENABLE_NS3=1 bash scripts/bootstrap.sh` (see [Section 1.2](#12-running-bootstrapsh)).
+
+#### 5.5.1 Three levels of configuration
+
+The UI layers ns-3's ~42 knobs into three tiers of complexity so casual users see a short form while hardware engineers can drill into every parameter:
+
+| Tier | What's shown | Who it's for |
+|------|-------------|--------------|
+| **Top-level** | Logical dimensions, physical topology path, base mix-config path | Everyone — these three fields define the network shape. |
+| **Essentials card** (always open) | `CC_MODE`, `PACKET_PAYLOAD_SIZE`, `BUFFER_SIZE`, `ERROR_RATE_PER_LINK`, `ENABLE_QCN`, `RATE_AI`, `RATE_HAI`, `MIN_RATE` | Typical users tuning congestion control and buffer size. |
+| **Nine collapsed accordions** | The remaining ~34 fields grouped by function | Hardware engineers running CC-algorithm comparisons or rate-sensitivity sweeps. |
+
+Every knob has a sensible default drawn from the shipped reference `config.txt`, so you only need to touch the fields you actually care about.
+
+#### 5.5.2 Logical vs physical topology
+
+ns-3 splits the network into two orthogonal concerns, and the UI reflects that split:
+
+- **Logical topology** (`logical_dims`): how NPUs are grouped into collective dimensions. Same semantics as the analytical backend's `npus_count`. For example, `[8]` = one 8-NPU ring; `[4, 2]` = 4 rings of 2 NPUs each.
+- **Physical topology** (`physical_topology_path`): a path to a text file describing switches, hosts, and per-link bandwidth/latency. ns-3 reads this file at startup — the format is documented in the file itself (one topology per row). The default points at `extern/network_backend/ns-3/scratch/topology/8_nodes_1_switch_topology.txt` (8 hosts, 1 switch, 400 Gbps per host link). Change the path to swap topologies without rebuilding.
+
+> **Why the split?** Analytical backends compute collective timing directly from dimension sizes. ns-3 needs real hops, so it takes a separate file describing them. You can run the same logical workload on different physical topologies to see how topology choice affects completion time.
+
+#### 5.5.3 Essentials card — quick reference
+
+| Field | Default | Role |
+|-------|---------|------|
+| `CC_MODE` | 12 (HPCC-PINT-HAI) | Congestion-control algorithm. See table below. |
+| `PACKET_PAYLOAD_SIZE` | 1000 | Bytes per packet (64–9216; jumbo frames up to 9216). |
+| `BUFFER_SIZE` | 32 | Switch per-port buffer in MB (1–1024). |
+| `ERROR_RATE_PER_LINK` | 0.0 | Random packet-loss probability per hop (0.0–1.0). Leave at 0 for a clean-link baseline. |
+| `ENABLE_QCN` | true | Turn on RDMA congestion notification. Required for DCQCN/HPCC to do anything. |
+| `RATE_AI` | 50Mb/s | Additive-increase rate (DCQCN). |
+| `RATE_HAI` | 100Mb/s | Hyper-additive-increase rate (DCQCN fast recovery). |
+| `MIN_RATE` | 100Mb/s | Floor for pacing. |
+
+Rate strings use ns-3's format: `<number><unit>` where unit is `Mb/s`, `Gb/s`, `Tb/s`, etc.
+
+#### 5.5.4 Congestion-control mode reference
+
+| Value | Mode | Status | Notes |
+|------:|------|--------|-------|
+| 1 | **DCQCN** | Implemented | Default RoCE congestion control. Reacts to ECN marks with AI/MD. |
+| 3 | **HPCC** | Implemented | High-Precision Congestion Control. Uses INT (in-band network telemetry) for sub-RTT reaction. |
+| 7 | **TIMELY** | Implemented | RTT-based pacing. |
+| 8 | **DCTCP** | Implemented | TCP-style ECN reaction, adapted for RDMA. |
+| 10 | **PINT** | Implemented | Probabilistic INT variant. |
+| 11 | **HPCC-PINT** | Experimental | In upstream defaults but `rdma-hw.cc` has no dedicated path — silently falls through to a default algorithm. UI shows an amber warning. |
+| 12 | **HPCC-PINT-HAI** | Experimental | Same caveat as 11. Shipped as the default to match upstream config.txt. |
+
+**If you see the amber warning** — the run will complete, but cycle counts won't reflect the mode name. Pick 3 (HPCC) or 1 (DCQCN) for trustworthy numbers.
+
+#### 5.5.5 The nine accordions
+
+Everything else lives in collapsed accordions. Each one is grouped by function, so if you know which axis you want to tune you can go straight to it:
+
+| Accordion | Fields | When to touch |
+|-----------|--------|---------------|
+| **Rates** | `RATE_AI`, `RATE_HAI`, `MIN_RATE`, `DCTCP_RATE_AI` | Tuning DCQCN / DCTCP aggressiveness. |
+| **Congestion control tuning** | `ALPHA_RESUME_INTERVAL`, `RATE_DECREASE_INTERVAL`, `RP_TIMER`, `EWMA_GAIN`, `FAST_RECOVERY_TIMES`, `CLAMP_TARGET_RATE` | DCQCN timer/gain sensitivity studies. |
+| **Window / HPCC advanced** | `HAS_WIN`, `GLOBAL_T`, `VAR_WIN`, `FAST_REACT`, `U_TARGET`, `MI_THRESH`, `INT_MULTI`, `PINT_LOG_BASE`, `PINT_PROB`, `MULTI_RATE`, `SAMPLE_FEEDBACK`, `RATE_BOUND` | HPCC/PINT utilization-target and window-control tuning. |
+| **ECN threshold maps** | `KMAX_MAP`, `KMIN_MAP`, `PMAX_MAP` | Per-bandwidth ECN marking thresholds — see next subsection. |
+| **Global switches** | `USE_DYNAMIC_PFC_THRESHOLD`, `ENABLE_TRACE`, `ACK_HIGH_PRIO`, `L2_BACK_TO_ZERO` | Turning features on/off for ablation studies. |
+| **Packet / link layer** | `L2_CHUNK_SIZE`, `L2_ACK_INTERVAL`, `NIC_TOTAL_PAUSE_TIME` | MTU-level and ACK-coalescing experiments. |
+| **Timing** | `SIMULATOR_STOP_TIME`, `QLEN_MON_START`, `QLEN_MON_END` | Bound the simulated time window. Picoseconds. |
+| **Link control** | `LINK_DOWN` (src, dst, time) | Fault-injection: drop a link at simulator time T. |
+| **Raw overrides** | `extra_overrides` key-value table | Escape hatch — see below. |
+
+#### 5.5.6 ECN threshold maps
+
+Three maps configure RED/ECN marking per link speed:
+
+- `KMIN_MAP` — below this queue depth, never mark.
+- `KMAX_MAP` — above this queue depth, always mark.
+- `PMAX_MAP` — marking probability between KMIN and KMAX.
+
+Each map has one row per bandwidth tier. The defaults cover 25G/40G/100G/200G/400G/2.4T. **All three maps must have the same row count and matching `bandwidth_bps` values per row**; `KMIN.threshold ≤ KMAX.threshold` per row. The schema rejects broken maps at validation time so a misconfigured ECN curve never reaches the simulator.
+
+Edit all three in the **ECN threshold maps** accordion.
+
+#### 5.5.7 Escape hatch — raw overrides
+
+Any key that isn't modeled as a typed field can be set via the **Raw overrides** accordion. Keys are raw `UPPER_SNAKE_CASE` (matching the `config.txt` format) and values are free text. This is applied **last** — after typed fields, after ECN maps — so a raw override wins over a typed value for the same key.
+
+When to use it:
+- A new ns-3 build adds a config key we haven't surfaced as a typed field yet.
+- You want to test a parameter value outside the typed-field validator's bounds.
+- You want a quick one-off without editing code.
+
+When not to use it:
+- You want the override to persist — typed fields round-trip through presets; raw overrides don't survive serialization in the same way.
+
+#### 5.5.8 Per-run `config.txt`
+
+Every ns-3 run materializes its full configuration to `runs/<id>/configs/config.txt` before launch. This file is:
+
+- The exact parameter set ns-3 read from disk — typed fields, ECN maps, extra_overrides, and internal path redirects all already applied.
+- Available in the UI via the **Config** tab on the results page (inline view + download).
+- Available on disk for scripted reproduction: copy it to `extern/network_backend/ns-3/scratch/config/` and set `mix_config_path` to that location for a future run.
+
+Use it when cycles differ unexpectedly between two supposedly-identical runs — diff the two config.txt files and the real parameter difference becomes obvious.
+
+#### 5.5.9 Output files
+
+ns-3 writes four output files per run, all redirected into `runs/<id>/logs/` so concurrent runs don't clobber each other:
+
+| File | Format | Content |
+|------|--------|---------|
+| `fct.txt` | Plain text, one row per flow | `sip dip sport dport size_bytes start_ns fct_ns standalone_fct_ns`. The Links tab aggregates this into the heatmap. |
+| `qlen.txt` | Plain text, space-separated | Switch-port queue depth samples at simulator ticks. Sparse — only logged when ≥1000 bytes are queued. |
+| `pfc.txt` | Plain text | PFC pause/resume events. Empty for workloads that don't saturate links. |
+| `mix.tr` | ns-3 binary trace | Full packet-level trace. Not parsed by the UI today; reserved for `ns-3`-native tools. |
+
+The Links tab (Section 3.7) consumes `fct.txt`; the Config tab surfaces `config.txt`. For anything more detailed, open the files directly.
 
 ---
 
@@ -791,3 +952,20 @@ Use the Compare tab to analyze differences between two simulation runs:
 | **PER_NPU_MEMORY_EXPANSION** | Memory architecture where each NPU has independent remote memory access with no serialization |
 | **MEMORY_POOL** | Shared memory pool architecture where all NPUs share one memory with globally serialized transactions |
 | **SSE** | Server-Sent Events — HTTP-based protocol for server-to-client event streaming |
+| **ns-3** | Discrete-event network simulator (nsnam.org) — provides the packet-level backend with real queues and congestion control |
+| **CC_MODE** | ns-3 congestion-control mode selector: 1=DCQCN, 3=HPCC, 7=TIMELY, 8=DCTCP, 10=PINT, 11/12=experimental HPCC-PINT variants |
+| **DCQCN** | Data Center Quantized Congestion Notification — RoCE-v2 congestion control using ECN marks with additive-increase/multiplicative-decrease |
+| **HPCC** | High-Precision Congestion Control — uses in-band telemetry (INT) for sub-RTT rate adjustment |
+| **DCTCP** | Data Center TCP — ECN-aware congestion control adapted for low-latency datacenter fabrics |
+| **TIMELY** | RTT-based datacenter congestion control |
+| **PINT** | Probabilistic INT — a sampled variant of HPCC's in-band telemetry |
+| **PFC** | Priority Flow Control — per-priority link-level pause frames that stop traffic when a downstream queue fills |
+| **ECN** | Explicit Congestion Notification — IP-level bit marking used instead of dropping packets when queues get deep |
+| **QCN** | Quantized Congestion Notification — the IEEE 802.1Qau-based ECN scheme used by RDMA |
+| **FCT** | Flow Completion Time — time from first byte to last byte of a flow; a primary ns-3 output metric |
+| **QLEN** | Queue length — switch-port buffer occupancy; ns-3 samples this during the `QLEN_MON_START`–`QLEN_MON_END` window |
+| **INT** | In-band Network Telemetry — switches embed per-hop bandwidth/queue data in packets for end-host congestion control |
+| **MTU / L2 chunk** | Maximum transmission unit; `L2_CHUNK_SIZE` in ns-3's config sets the link-layer chunk size |
+| **Logical topology** | (ns-3) NPU grouping for collective operations — same concept as analytical's `npus_count` |
+| **Physical topology** | (ns-3) A separate topology file describing switches, hosts, and per-link bandwidth/latency that ns-3 reads at startup |
+| **extra_overrides** | Escape-hatch dictionary in ns-3 config: raw `UPPER_SNAKE_CASE` keys overlaid last, winning over typed fields |
