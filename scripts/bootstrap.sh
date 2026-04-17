@@ -31,6 +31,26 @@ check_prereqs() {
     fail "Resolve missing prerequisites and re-run."
   fi
   log "System prerequisites OK."
+  if [[ "${ENABLE_NS3:-0}" == "1" ]]; then
+    ensure_mpi
+  fi
+}
+
+# ns-3 build needs MPI (openmpi). Only called when ENABLE_NS3=1.
+ensure_mpi() {
+  if command -v mpicxx >/dev/null 2>&1; then
+    log "MPI toolchain present ($(mpicxx --version | head -n1))."
+    return
+  fi
+  if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+    log "MPI not found; installing libopenmpi-dev openmpi-bin via sudo apt..."
+    sudo apt-get update -qq
+    sudo apt-get install -y libopenmpi-dev openmpi-bin
+  else
+    warn "ns-3 requires MPI but 'mpicxx' is missing and auto-install is unavailable."
+    warn "Install manually: sudo apt install -y libopenmpi-dev openmpi-bin"
+    fail "Resolve missing MPI toolchain and re-run with ENABLE_NS3=1."
+  fi
 }
 
 # ---------- 2. Submodules ----------
@@ -45,6 +65,11 @@ init_submodules() {
     extern/remote_memory_backend/analytical \
     extern/helper/fmt \
     extern/helper/spdlog
+  if [[ "${ENABLE_NS3:-0}" == "1" ]]; then
+    log "ENABLE_NS3=1: initializing ns-3 submodule (astra-network-ns3)..."
+    git -C frameworks/astra-sim submodule update --init \
+      extern/network_backend/ns-3
+  fi
   log "Submodules ready."
 }
 
@@ -86,6 +111,22 @@ EOF
   if [[ -f "$proto_dir/et_def.proto" && ! -f "$proto_dir/et_def_pb2.py" ]]; then
     log "Generating $proto_dir/et_def_pb2.py..."
     protoc --proto_path="$proto_dir" --python_out="$proto_dir" "$proto_dir/et_def.proto"
+  fi
+
+  # 3d. ns-3 patches.
+  # The shipped ns-3 config.txt references scratch/output/flow.txt as an
+  # INPUT (number of synthetic flows, then definitions). ASTRA-sim-driven
+  # runs generate traffic from workload traces and need zero synthetic
+  # flows. Create the empty-flow file if missing so SetupNetwork() can
+  # open it. Idempotent.
+  local ns3_dir="frameworks/astra-sim/extern/network_backend/ns-3"
+  if [[ -d "$ns3_dir" ]] && [[ "${ENABLE_NS3:-0}" == "1" ]]; then
+    local flow_file="${ns3_dir}/scratch/output/flow.txt"
+    if [[ ! -f "$flow_file" ]]; then
+      log "Creating empty ns-3 flow file at $flow_file..."
+      mkdir -p "$(dirname "$flow_file")"
+      echo "0" > "$flow_file"
+    fi
   fi
 }
 
@@ -171,6 +212,10 @@ create_backend_venv() {
 # ---------- 8. ASTRA-sim build ----------
 build_astrasim() {
   bash "${REPO_ROOT}/scripts/build_backends.sh"
+  if [[ "${ENABLE_NS3:-0}" == "1" ]]; then
+    log "ENABLE_NS3=1: building ns-3 backend..."
+    ENABLE_NS3=1 bash "${REPO_ROOT}/scripts/build_backends.sh" ns3
+  fi
 }
 
 main() {

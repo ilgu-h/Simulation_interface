@@ -31,17 +31,34 @@ class AstraInvocation:
     network_config: Path
     memory_config: Path
     logging_folder: Path
+    # Only populated for ns-3 runs; analytical has no logical topology flag.
+    logical_topology_config: Path | None = None
+    # The analytical binary accepts --logging-folder; the ns-3 binary does
+    # not (it uses only --logging-configuration). Toggle so ns-3 invocations
+    # skip the unsupported flag. The `logging_folder` path is still created
+    # by the orchestrator for stdout capture regardless.
+    emit_logging_folder: bool = True
+    # Working directory for the subprocess. ns-3's `config.txt` uses paths
+    # like `../../scratch/topology/...` that only resolve when cwd is
+    # `ns-3/build/scratch/`. Analytical has no such requirement.
+    cwd: Path | None = None
 
     def cli(self) -> list[str]:
-        return [
+        args = [
             str(self.binary),
             f"--workload-configuration={self.workload_prefix}",
             f"--comm-group-configuration={self.comm_group_config}",
             f"--system-configuration={self.system_config}",
             f"--network-configuration={self.network_config}",
             f"--remote-memory-configuration={self.memory_config}",
-            f"--logging-folder={self.logging_folder}",
         ]
+        if self.emit_logging_folder:
+            args.append(f"--logging-folder={self.logging_folder}")
+        if self.logical_topology_config is not None:
+            args.append(
+                f"--logical-topology-configuration={self.logical_topology_config}"
+            )
+        return args
 
 
 def resolve_comm_group_config(workload_prefix: Path) -> Path | str:
@@ -61,6 +78,9 @@ def build_invocation(
     config_dir: Path,
     logging_folder: Path,
     comm_group_config: Path | str | None = None,
+    network_config: Path | None = None,
+    logical_topology_config: Path | None = None,
+    cwd: Path | None = None,
 ) -> AstraInvocation:
     resolved_comm_group = (
         comm_group_config
@@ -72,9 +92,12 @@ def build_invocation(
         workload_prefix=workload_prefix,
         comm_group_config=resolved_comm_group,
         system_config=config_dir / "system.json",
-        network_config=config_dir / "network.yml",
+        network_config=network_config if network_config is not None else config_dir / "network.yml",
         memory_config=config_dir / "memory.json",
         logging_folder=logging_folder,
+        logical_topology_config=logical_topology_config,
+        emit_logging_folder=(adapter.network_schema != "ns3"),
+        cwd=cwd,
     )
 
 
@@ -100,6 +123,7 @@ def stream_run(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        cwd=str(invocation.cwd) if invocation.cwd is not None else None,
     )
     register_run(run_id, proc)
     try:

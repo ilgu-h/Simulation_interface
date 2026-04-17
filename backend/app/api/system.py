@@ -6,11 +6,15 @@ import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.build.backend_adapter import BackendAdapter, is_built, list_backends
 from app.schemas.memory_config import MemoryConfig
-from app.schemas.network_config import NetworkConfig
+from app.schemas.network_config import (
+    AnalyticalNetworkConfig,
+    NetworkConfigUnion,
+    NS3NetworkConfig,
+)
 from app.schemas.system_config import SystemConfig
 from app.storage.fs_layout import configs_dir, new_run_id
 
@@ -20,9 +24,9 @@ router = APIRouter()
 class ConfigBundle(BaseModel):
     backend: str = "analytical_cu"
     system: SystemConfig = SystemConfig()
-    network: NetworkConfig = NetworkConfig()
+    network: NetworkConfigUnion = Field(default_factory=AnalyticalNetworkConfig)
     memory: MemoryConfig = MemoryConfig()
-    expected_npus: int | None = None  # cross-check: prod(network.npus_count) == this
+    expected_npus: int | None = None  # cross-check: network.total_npus == this
 
 
 class Issue(BaseModel):
@@ -68,27 +72,57 @@ def _validate_bundle(bundle: ConfigBundle) -> tuple[list[Issue], BackendAdapter 
         )
 
     if bundle.expected_npus is not None and bundle.network.total_npus != bundle.expected_npus:
+        field_name = (
+            "network.npus_count"
+            if isinstance(bundle.network, AnalyticalNetworkConfig)
+            else "network.logical_dims"
+        )
         issues.append(
             Issue(
                 severity="error",
-                field="network.npus_count",
+                field=field_name,
                 message=(
-                    f"prod(npus_count)={bundle.network.total_npus} but workload expects "
+                    f"total_npus={bundle.network.total_npus} but workload expects "
                     f"{bundle.expected_npus} NPUs."
                 ),
             )
         )
 
-    # Switch topology only sensible at the outermost dim with >=2 NPUs.
-    for i, t in enumerate(bundle.network.topology):
-        if t == "Switch" and bundle.network.npus_count[i] < 2:
-            issues.append(
-                Issue(
-                    severity="error",
-                    field=f"network.npus_count[{i}]",
-                    message="Switch topology requires npus_count >= 2.",
+    if isinstance(bundle.network, AnalyticalNetworkConfig):
+        # Switch topology only sensible at the outermost dim with >=2 NPUs.
+        for i, t in enumerate(bundle.network.topology):
+            if t == "Switch" and bundle.network.npus_count[i] < 2:
+                issues.append(
+                    Issue(
+                        severity="error",
+                        field=f"network.npus_count[{i}]",
+                        message="Switch topology requires npus_count >= 2.",
+                    )
                 )
-            )
+    elif isinstance(bundle.network, NS3NetworkConfig):
+        # ns-3 physical topology lives inside the ns-3 submodule; warn (not
+        # error) if the file is missing so users can edit configs before the
+        # submodule is cloned.
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parents[3]
+        for field, rel in (
+            ("network.physical_topology_path", bundle.network.physical_topology_path),
+            ("network.mix_config_path", bundle.network.mix_config_path),
+        ):
+            candidate = repo_root / "frameworks" / "astra-sim" / rel
+            if not candidate.exists():
+                issues.append(
+                    Issue(
+                        severity="warning",
+                        field=field,
+                        message=(
+                            f"{rel} not found under astra-sim. Either run "
+                            "'ENABLE_NS3=1 bash scripts/bootstrap.sh' to clone the "
+                            "ns-3 submodule, or update the path."
+                        ),
+                    )
+                )
 
     # Memory config validation.
     mem = bundle.memory
@@ -145,13 +179,19 @@ def materialize_configs(bundle: ConfigBundle) -> MaterializeResponse:
     cdir = configs_dir(run_id)
     cdir.mkdir(parents=True, exist_ok=True)
 
-    network_path = cdir / "network.yml"
     system_path = cdir / "system.json"
     memory_path = cdir / "memory.json"
-
-    network_path.write_text(bundle.network.to_yaml())
     system_path.write_text(json.dumps(bundle.system.to_json_dict(), indent=4) + "\n")
     memory_path.write_text(json.dumps(bundle.memory.to_json_dict(), indent=4) + "\n")
+
+    # Variant-specific network materialization. Analytical → network.yml;
+    # ns3 → logical_topology.json (physical topology stays inside ns-3).
+    if isinstance(bundle.network, AnalyticalNetworkConfig):
+        network_path = cdir / "network.yml"
+        network_path.write_text(bundle.network.to_yaml())
+    else:  # NS3NetworkConfig
+        network_path = cdir / "logical_topology.json"
+        network_path.write_text(bundle.network.to_logical_topology_json())
 
     return MaterializeResponse(
         run_id=run_id,

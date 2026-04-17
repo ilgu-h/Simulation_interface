@@ -1,9 +1,9 @@
 "use client";
 
-import type { NetworkConfig, TopologyKind } from "@/lib/api";
+import type { AnalyticalNetworkConfig, TopologyKind } from "@/lib/api";
 
 type Props = {
-  network: NetworkConfig;
+  network: AnalyticalNetworkConfig;
   errorDimIdx?: number | null;
 };
 

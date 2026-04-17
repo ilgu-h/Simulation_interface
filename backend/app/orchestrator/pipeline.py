@@ -27,6 +27,7 @@ from sqlmodel import Session
 from app.api.system import ConfigBundle
 from app.build.backend_adapter import BackendAdapter, get_backend, is_built
 from app.orchestrator.astra_runner import build_invocation, stream_run
+from app.schemas.network_config import AnalyticalNetworkConfig, NS3NetworkConfig
 from app.storage.fs_layout import configs_dir, logs_dir, run_dir
 from app.storage.registry import Artifact, Run, get_engine
 
@@ -182,8 +183,16 @@ def _materialize(bundle: ConfigBundle, run_id: str) -> Path:
     cdir = configs_dir(run_id)
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "system.json").write_text(json.dumps(bundle.system.to_json_dict(), indent=4) + "\n")
-    (cdir / "network.yml").write_text(bundle.network.to_yaml())
     (cdir / "memory.json").write_text(json.dumps(bundle.memory.to_json_dict(), indent=4) + "\n")
+    if isinstance(bundle.network, AnalyticalNetworkConfig):
+        (cdir / "network.yml").write_text(bundle.network.to_yaml())
+    elif isinstance(bundle.network, NS3NetworkConfig):
+        # ns-3 needs a logical topology JSON (we materialize) plus physical
+        # topology + mix/config.txt which live inside the ns-3 submodule and
+        # are referenced by path (not copied).
+        (cdir / "logical_topology.json").write_text(
+            bundle.network.to_logical_topology_json()
+        )
     return cdir
 
 
@@ -224,11 +233,32 @@ def execute_pipeline(run_id: str, bundle: ConfigBundle, workload_prefix: Path) -
     cdir = _materialize(bundle, run_id)
     _set_status(run_id, "running")
 
+    # ns-3 runs need extra wiring: --network-configuration points at the
+    # ns-3 mix/config.txt (inside the ns-3 submodule), and a separate
+    # --logical-topology-configuration flag carries the per-run logical dims.
+    # The binary must also run with cwd=ns-3/build/scratch because the
+    # shipped config.txt references topology files via relative paths like
+    # "../../scratch/topology/...".
+    network_config_override: Path | None = None
+    logical_topology_config: Path | None = None
+    cwd: Path | None = None
+    if isinstance(bundle.network, NS3NetworkConfig):
+        astra_sim_root = REPO_ROOT / "frameworks" / "astra-sim"
+        network_config_override = astra_sim_root / bundle.network.mix_config_path
+        logical_topology_config = cdir / "logical_topology.json"
+        ns3_scratch_build = (
+            astra_sim_root / "extern" / "network_backend" / "ns-3" / "build" / "scratch"
+        )
+        cwd = ns3_scratch_build
+
     invocation = build_invocation(
         adapter,
         workload_prefix=workload_prefix,
         config_dir=cdir,
         logging_folder=logs_dir(run_id),
+        network_config=network_config_override,
+        logical_topology_config=logical_topology_config,
+        cwd=cwd,
     )
     append_event(
         run_id,

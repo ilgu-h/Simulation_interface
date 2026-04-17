@@ -98,12 +98,29 @@ export const listBackends = (): Promise<BackendInfo[]> => getJson<BackendInfo[]>
 
 export type TopologyKind = "Ring" | "FullyConnected" | "Switch";
 
-export type NetworkConfig = {
+export type AnalyticalNetworkConfig = {
+  kind: "analytical";
   topology: TopologyKind[];
   npus_count: number[];
   bandwidth: number[];
   latency: number[];
 };
+
+export type Ns3NetworkConfig = {
+  kind: "ns3";
+  logical_dims: number[];
+  physical_topology_path: string;
+  mix_config_path: string;
+};
+
+export type NetworkConfig = AnalyticalNetworkConfig | Ns3NetworkConfig;
+
+export const isNs3NetworkConfig = (n: NetworkConfig): n is Ns3NetworkConfig =>
+  n.kind === "ns3";
+
+export const isAnalyticalNetworkConfig = (
+  n: NetworkConfig,
+): n is AnalyticalNetworkConfig => n.kind === "analytical";
 
 export type SystemConfig = {
   "scheduling-policy": "LIFO" | "FIFO";
@@ -322,12 +339,36 @@ export const defaultSystemConfig = (): SystemConfig => ({
   "boost-mode": 0,
 });
 
-export const defaultNetworkConfig = (): NetworkConfig => ({
+export const defaultNetworkConfig = (): AnalyticalNetworkConfig => ({
+  kind: "analytical",
   topology: ["Ring"],
   npus_count: [8],
   bandwidth: [50.0],
   latency: [500.0],
 });
+
+export const defaultNs3NetworkConfig = (): Ns3NetworkConfig => ({
+  kind: "ns3",
+  logical_dims: [8],
+  physical_topology_path:
+    "extern/network_backend/ns-3/scratch/topology/8_nodes_1_switch_topology.txt",
+  mix_config_path: "extern/network_backend/ns-3/scratch/config/config.txt",
+});
+
+/**
+ * Total NPU count for whichever variant `n` is.
+ * Analytical: prod(npus_count). NS3: prod(logical_dims).
+ */
+export const networkTotalNpus = (n: NetworkConfig): number => {
+  const dims = isNs3NetworkConfig(n) ? n.logical_dims : n.npus_count;
+  return dims.reduce((a, b) => a * b, 1);
+};
+
+/** Pick the right default for a given network_schema string from /backends. */
+export const defaultNetworkForSchema = (
+  schema: string | undefined,
+): NetworkConfig =>
+  schema === "ns3" ? defaultNs3NetworkConfig() : defaultNetworkConfig();
 
 export const defaultMemoryConfig = (): MemoryConfig => ({
   "memory-type": "NO_MEMORY_EXPANSION",

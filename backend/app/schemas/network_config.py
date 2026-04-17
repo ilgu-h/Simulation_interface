@@ -1,35 +1,50 @@
-"""ASTRA-sim analytical-backend network config (multi-dimensional).
+"""ASTRA-sim network config — discriminated by `kind`.
 
-Reference shapes (frameworks/astra-sim/examples/network/analytical/):
+Two variants:
 
-  Ring_8npus.yml:
+  Analytical (analytical backend family):
+    kind: analytical
     topology: [ Ring ]
     npus_count: [ 8 ]
     bandwidth: [ 50.0 ]    # GB/s
     latency:   [ 500.0 ]   # ns
 
-A 2D mesh is two Ring dims: topology=[Ring,Ring], npus_count=[4,4]. Total
-NPU count is the product across dims.
+  NS-3 (packet-level backend):
+    kind: ns3
+    logical_dims: [ 8 ]
+    physical_topology_path: extern/network_backend/ns-3/.../topology.txt
+    mix_config_path: extern/network_backend/ns-3/.../mix/config.txt
+
+A 2D analytical mesh is two Ring dims: topology=[Ring,Ring], npus_count=[4,4];
+total NPU count is the product across dims. For ns-3 the same product rule
+applies to logical_dims.
+
+`NetworkConfig` is exported as an alias for `AnalyticalNetworkConfig` for
+backward compatibility — tests and callers that reference `NetworkConfig()`
+keep working. The discriminated union is `NetworkConfigUnion`, used by
+`ConfigBundle.network` in `app.api.system`.
 """
 
 from __future__ import annotations
 
+import json
 import math
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Discriminator, Field, Tag, model_validator
 
 TopologyKind = Literal["Ring", "FullyConnected", "Switch"]
 
 
-class NetworkConfig(BaseModel):
+class AnalyticalNetworkConfig(BaseModel):
+    kind: Literal["analytical"] = "analytical"
     topology: list[TopologyKind] = Field(default_factory=lambda: ["Ring"])
     npus_count: list[int] = Field(default_factory=lambda: [8])
     bandwidth: list[float] = Field(default_factory=lambda: [50.0])  # GB/s per dim
     latency: list[float] = Field(default_factory=lambda: [500.0])  # ns per dim
 
     @model_validator(mode="after")
-    def _check_dims(self) -> NetworkConfig:
+    def _check_dims(self) -> AnalyticalNetworkConfig:
         n = len(self.topology)
         for name, lst in (
             ("npus_count", self.npus_count),
@@ -68,8 +83,6 @@ class NetworkConfig(BaseModel):
 
         def _fmt(v: object) -> str:
             if isinstance(v, float):
-                # Drop trailing .0 only when it would lose information? No — keep
-                # one decimal so floats round-trip cleanly through YAML readers.
                 return repr(v) if v != int(v) else f"{v:.1f}"
             return str(v)
 
@@ -81,3 +94,69 @@ class NetworkConfig(BaseModel):
             "",
         ]
         return "\n".join(lines)
+
+
+class NS3NetworkConfig(BaseModel):
+    """NS-3 logical topology + pointer to ns-3 physical topology & mix config.
+
+    The physical topology and mix/config.txt live inside the ns-3 submodule
+    (licensing constraints); users editing them do so in-place. We pass the
+    paths through to the ns-3 binary via --network-configuration and
+    --logical-topology-configuration.
+    """
+
+    kind: Literal["ns3"] = "ns3"
+    logical_dims: list[int] = Field(default_factory=lambda: [8])
+    physical_topology_path: str = (
+        "extern/network_backend/ns-3/scratch/topology/8_nodes_1_switch_topology.txt"
+    )
+    mix_config_path: str = "extern/network_backend/ns-3/scratch/config/config.txt"
+
+    @model_validator(mode="after")
+    def _check_dims(self) -> NS3NetworkConfig:
+        if not self.logical_dims:
+            raise ValueError("logical_dims must have at least one entry.")
+        for d in self.logical_dims:
+            if d < 1:
+                raise ValueError(f"logical_dims entries must be >= 1 (got {d}).")
+        return self
+
+    @property
+    def total_npus(self) -> int:
+        return math.prod(self.logical_dims)
+
+    def to_logical_topology_json(self) -> str:
+        """Serialize to ns-3's logical topology JSON format.
+
+        ns-3 expects strings for each dim; stringify int entries.
+        """
+        payload = {"logical-dims": [str(d) for d in self.logical_dims]}
+        return json.dumps(payload, indent=2) + "\n"
+
+
+# Backward-compat alias. Existing code & tests do `NetworkConfig(...)` and
+# `NetworkConfig = NetworkConfig()`; keep that working by pointing at the
+# analytical variant. The ConfigBundle uses `NetworkConfigUnion` for the
+# discriminated field type.
+NetworkConfig = AnalyticalNetworkConfig
+
+
+def _network_kind(v: Any) -> str:
+    """Callable discriminator: defaults missing `kind` to analytical.
+
+    Legacy clients (and existing integration tests) send a bare
+    `{"topology": [...], "npus_count": [...]}` without a `kind` field. Fall
+    back to analytical so we stay compatible without forcing a schema churn.
+    """
+    if isinstance(v, dict):
+        return v.get("kind", "analytical")
+    return getattr(v, "kind", "analytical")
+
+
+NetworkConfigUnion = Annotated[
+    (
+        Annotated[AnalyticalNetworkConfig, Tag("analytical")]
+        | Annotated[NS3NetworkConfig, Tag("ns3")]
+    ),
+    Discriminator(_network_kind),
+]

@@ -11,7 +11,7 @@ class TestBackendAdapter:
         assert "analytical_cu" in names
         assert "analytical_ca" in names
 
-    def test_list_includes_stub(self):
+    def test_list_includes_ns3(self):
         names = [b.name for b in list_backends()]
         assert "ns3" in names
 
@@ -19,6 +19,10 @@ class TestBackendAdapter:
         b = get_backend("analytical_cu")
         assert b.label == "Analytical (Congestion Unaware)"
         assert b.network_schema == "analytical"
+
+    def test_ns3_uses_ns3_schema(self):
+        b = get_backend("ns3")
+        assert b.network_schema == "ns3"
 
     def test_get_unknown_raises(self):
         import pytest
@@ -30,7 +34,3 @@ class TestBackendAdapter:
         b = get_backend("analytical_cu")
         result = is_built(b)
         assert isinstance(result, bool)
-
-    def test_stub_not_built(self):
-        b = get_backend("ns3")
-        assert not is_built(b)

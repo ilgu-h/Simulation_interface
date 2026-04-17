@@ -43,6 +43,40 @@ class TestCli:
         assert comm_idx == workload_idx + 1
 
 
+class TestLogicalTopologyFlag:
+    """ns-3 invocations add --logical-topology-configuration; analytical
+    invocations must not."""
+
+    def test_analytical_has_no_logical_topology_flag(self):
+        inv = _sample_invocation(COMM_GROUP_EMPTY)
+        assert inv.logical_topology_config is None
+        assert not any(
+            a.startswith("--logical-topology-configuration=") for a in inv.cli()
+        )
+
+    def test_ns3_appends_logical_topology_flag(self):
+        inv = AstraInvocation(
+            binary=Path("/opt/astra/AstraSim_NS3"),
+            workload_prefix=Path("/tmp/run/traces/workload"),
+            comm_group_config=COMM_GROUP_EMPTY,
+            system_config=Path("/tmp/run/configs/system.json"),
+            network_config=Path("/opt/astra/ns-3/mix/config.txt"),
+            memory_config=Path("/tmp/run/configs/memory.json"),
+            logging_folder=Path("/tmp/run/logs"),
+            logical_topology_config=Path("/tmp/run/configs/logical_topology.json"),
+            emit_logging_folder=False,
+        )
+        cli = inv.cli()
+        assert (
+            "--logical-topology-configuration=/tmp/run/configs/logical_topology.json"
+            in cli
+        )
+        # Network config still points at ns-3's mix config (not the analytical yml).
+        assert "--network-configuration=/opt/astra/ns-3/mix/config.txt" in cli
+        # ns-3 doesn't accept --logging-folder; it must be suppressed.
+        assert not any(a.startswith("--logging-folder=") for a in cli)
+
+
 class TestResolveCommGroup:
     def test_returns_path_when_sibling_json_exists(self, tmp_path: Path):
         prefix = tmp_path / "workload"
